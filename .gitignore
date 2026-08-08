@@ -1,0 +1,10 @@
+venv/
+pycache/
+*.pyc
+
+.env
+
+instance/
+*.sqlite3
+
+data/myanmar_words.txt

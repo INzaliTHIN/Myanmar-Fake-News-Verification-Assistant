@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+
+{% block content %}
+
+
+<div class="card">
+
+<h1>
+Verification History
+</h1>
+
+
+{% for item in data %}
+
+
+<hr>
+
+
+<h3>
+Input:
+</h3>
+
+<p>
+{{ item.input_text }}
+</p>
+
+
+<p>
+Status:
+{{ item.status }}
+</p>
+
+
+<p>
+Confidence:
+{{ item.confidence }}
+</p>
+
+
+<p>
+{{ item.explanation }}
+</p>
+
+
+<small>
+{{ item.created_at }}
+</small>
+
+
+{% endfor %}
+
+
+</div>
+
+
+{% endblock %}

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Myanmar Fact Verification Assistant</title>
+
+</head>
+
+<body>
+
+    <h1>Myanmar Fact Verification Assistant</h1>
+
+    <hr>
+
+    <div>
+
+        <h2>Conversation</h2>
+
+        <p><strong>{{ conversation.title }}</strong></p>
+
+    </div>
+
+    <hr>
+
+    <div>
+
+        <h3>Chat History</h3>
+
+        <ul>
+
+            {% for c in conversations %}
+
+            <li>
+
+                <a href="{{ url_for('chat.chat_page', conversation_id=c.id) }}">
+
+                    {{ c.title }}
+
+                </a>
+
+            </li>
+
+            {% endfor %}
+
+        </ul>
+
+    </div>
+
+    <hr>
+
+    <div>
+
+        <h3>Messages</h3>
+
+        {% if messages %}
+
+            {% for message in messages %}
+
+                <div>
+
+                    <strong>{{ message.role|capitalize }}</strong>
+
+                    <p>{{ message.content }}</p>
+
+                    {% if message.verification_status %}
+
+                        <p>
+
+                            <b>Status:</b>
+
+                            {{ message.verification_status }}
+
+                        </p>
+
+                    {% endif %}
+
+                    {% if message.confidence_score %}
+
+                        <p>
+
+                            <b>Confidence:</b>
+
+                            {{ message.confidence_score }}
+
+                        </p>
+
+                    {% endif %}
+
+                    {% if message.evidence %}
+
+                        <p>
+
+                            <b>Evidence:</b>
+
+                            {{ message.evidence }}
+
+                        </p>
+
+                    {% endif %}
+
+                    {% if message.explanation %}
+
+                        <p>
+
+                            <b>Explanation:</b>
+
+                            {{ message.explanation }}
+
+                        </p>
+
+                    {% endif %}
+
+                    <hr>
+
+                </div>
+
+            {% endfor %}
+
+        {% else %}
+
+            <p>No messages yet.</p>
+
+        {% endif %}
+
+    </div>
+
+    <hr>
+
+    <form method="POST"
+          action="{{ url_for('chat.send', conversation_id=conversation.id) }}">
+
+        <textarea
+            name="content"
+            rows="5"
+            cols="80"
+            placeholder="Enter Myanmar text or paste a public URL..."
+            required></textarea>
+
+        <br><br>
+
+        <button type="submit">
+
+            Send
+
+        </button>
+
+    </form>
+
+</body>
+
+</html>

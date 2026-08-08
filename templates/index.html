@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+
+{% block content %}
+
+
+<div class="card">
+
+
+<h1>
+AI Fact Verification Assistant
+</h1>
+
+
+<form action="/verify"
+method="POST">
+
+
+<textarea
+name="text"
+placeholder="Enter Myanmar text..."
+required></textarea>
+
+
+<br>
+
+
+<button type="submit">
+Verify
+</button>
+
+
+</form>
+
+
+</div>
+
+
+{% endblock %}
