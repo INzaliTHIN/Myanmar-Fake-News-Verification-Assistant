@@ -8,3 +8,6 @@ instance/
 *.sqlite3
 
 data/myanmar_words.txt
+
+*.db
+chroma_db/

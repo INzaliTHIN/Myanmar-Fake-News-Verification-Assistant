@@ -215,11 +215,13 @@ overflow:hidden;
 
 .bar{
 
-
 height:100%;
 
 background:#28a745;
 
+width:var(--confidence);
+
+transition:0.5s;
 
 }
 
