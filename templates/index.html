@@ -1,39 +1,176 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<title>
+Myanmar AI Fact Checker
+</title>
+
+<link rel="stylesheet"
+href="/static/style.css">
+
+</head>
 
 
-{% block content %}
+<body>
 
 
-<div class="card">
+<div class="container">
 
+
+<div class="header">
 
 <h1>
-AI Fact Verification Assistant
+📰 Myanmar AI Fact Checker
 </h1>
 
+<p>
+AI Powered Fake News Verification System
+</p>
 
-<form action="/verify"
-method="POST">
+</div>
+
+
+
+<form method="POST">
 
 
 <textarea
-name="text"
-placeholder="Enter Myanmar text..."
+name="claim"
+placeholder="Paste news text or URL here..."
 required></textarea>
 
 
-<br>
 
-
-<button type="submit">
-Verify
+<button>
+🔍 Verify News
 </button>
 
 
 </form>
 
 
+
+
+
+{% if result %}
+
+
+<div class="result-card">
+
+
+<h2>
+Verification Result
+</h2>
+
+
+
+{% if result.status == "Likely True" %}
+
+<div class="badge true">
+🟢 REAL NEWS
 </div>
 
 
-{% endblock %}
+{% elif result.status == "Likely False" %}
+
+
+<div class="badge false">
+🔴 FAKE NEWS
+</div>
+
+
+{% else %}
+
+
+<div class="badge uncertain">
+🟡 UNCERTAIN
+</div>
+
+
+{% endif %}
+
+
+
+
+<h3>
+Confidence
+</h3>
+
+
+<div class="progress">
+
+<div class="bar"
+style="width:{{result.confidence}}%">
+</div>
+
+</div>
+
+
+<p class="confidence">
+
+{{result.confidence}}%
+
+</p>
+
+
+
+
+
+<h3>
+Evidence
+</h3>
+
+
+{% for item in result.evidence %}
+
+
+
+<div class="evidence-card">
+
+
+<h4>
+{{item.source}}
+</h4>
+
+
+<p>
+{{item.content}}
+</p>
+
+
+
+{% if item.url %}
+
+<a href="{{item.url}}" target="_blank">
+
+🔗 Open Source
+
+</a>
+
+{% endif %}
+
+
+</div>
+
+
+
+{% endfor %}
+
+
+
+</div>
+
+
+{% endif %}
+
+
+
+</div>
+
+
+</body>
+
+</html>

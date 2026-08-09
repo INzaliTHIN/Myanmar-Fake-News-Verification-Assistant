@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>
+Verification Result
+</title>
+
+</head>
+
+
+<body>
+
+
+<h1>
+Result
+</h1>
+
+
+<h2>
+{{ result.status }}
+</h2>
+
+
+
+<h3>
+Confidence:
+{{ result.confidence }}%
+</h3>
+
+
+
+<hr>
+
+
+<h2>
+Evidence
+</h2>
+
+
+
+{% if result.evidence %}
+
+
+{% for item in result.evidence %}
+
+
+<div>
+
+
+<p>
+<b>Source:</b>
+{{ item.source }}
+</p>
+
+
+<p>
+<b>URL:</b>
+
+{% if item.url %}
+
+<a href="{{ item.url }}" target="_blank">
+{{ item.url }}
+</a>
+
+{% else %}
+
+URL unavailable
+
+{% endif %}
+
+</p>
+
+
+
+<p>
+{{ item.content }}
+</p>
+
+
+</div>
+
+
+<hr>
+
+
+{% endfor %}
+
+
+
+{% else %}
+
+
+<p>
+No supporting evidence found
+</p>
+
+
+{% endif %}
+
+
+
+</body>
+
+</html>

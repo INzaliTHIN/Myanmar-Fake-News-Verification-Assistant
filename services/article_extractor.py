@@ -1,68 +1,77 @@
-import requests
-
 from bs4 import BeautifulSoup
-
-from urllib.parse import urljoin
 
 
 
 class ArticleExtractor:
 
 
-    def get_article_links(
-        self,
-        url,
-        limit=5
-    ):
-
+    def extract(self, html):
 
         try:
 
-            response = requests.get(
-                url,
-                timeout=30,
-                headers={
-                    "User-Agent":
-                    "Myanmar-Fact-Verification-Research-Bot/1.0"
-                }
-            )
-
-
-            response.raise_for_status()
-
-
             soup = BeautifulSoup(
-                response.text,
+                html,
                 "html.parser"
             )
 
 
-            links = []
+            # Title
 
+            title = ""
 
-            for a in soup.find_all("a", href=True):
+            if soup.title:
 
-
-                link = urljoin(
-                    url,
-                    a["href"]
-                )
-
-
-                if link not in links:
-
-                    links.append(
-                        link
-                    )
-
-
-                if len(links) >= limit:
-
-                    break
+                title = soup.title.text.strip()
 
 
 
-            return links
+            # Remove unnecessary tags
+
+            for tag in soup(
+                [
+                    "script",
+                    "style",
+                    "nav",
+                    "footer"
+                ]
+            ):
+
+                tag.decompose()
+
+
+
+            # Extract text
+
+            text = soup.get_text(
+                separator="\n"
+            )
+
+
+            lines = []
+
+
+            for line in text.split("\n"):
+
+                line = line.strip()
+
+
+                if len(line) > 20:
+
+                    lines.append(line)
+
+
+
+            content = "\n".join(lines)
+
+
+
+            return {
+
+                "title": title,
+
+                "content": content
+
+            }
 
 
 
@@ -70,9 +79,9 @@ class ArticleExtractor:
 
 
             print(
-                "Article link error:",
+                "Extraction error:",
                 e
             )
 
 
-            return []
+            return None

@@ -15,19 +15,20 @@ from models.history import (
 )
 
 
-from services.nlp_service import (
-    MyanmarTextProcessor
-)
+from services.nlp_service import MyanmarTextProcessor
+from services.spelling_service import MyanmarSpellChecker
 
+from services.url_service import URLService
+from services.article_extractor import ArticleExtractor
+from services.article_service import ArticleService
+from services.vector_service import VectorService
+from services.verification_service import VerificationService
 
-from services.spelling_service import (
-    MyanmarSpellChecker
-)
-
+from routes.verification import verification
 
 
 # =========================
-# Flask App Setup
+# Flask Setup
 # =========================
 
 app = Flask(__name__)
@@ -35,13 +36,34 @@ app = Flask(__name__)
 app.config.from_object(Config)
 
 
-# Database initialize
+# Blueprint
+
+app.register_blueprint(
+    verification
+)
+
+
+# =========================
+# Services
+# =========================
+
+url_service = URLService()
+
+article_extractor = ArticleExtractor()
+
+article_service = ArticleService()
+
+vector_service = VectorService()
+
+verification_service = VerificationService()
+
+
+
+# Database
 
 db.init_app(app)
 
 
-
-# Create database tables
 
 with app.app_context():
 
@@ -50,11 +72,98 @@ with app.app_context():
 
 
 # =========================
-# Home Page
+# Home
 # =========================
 
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 def home():
+
+    if request.method == "POST":
+
+
+        claim = request.form.get("claim")
+
+        url = request.form.get("url")
+
+
+
+        # =====================
+        # URL Processing
+        # =====================
+
+        if url:
+
+
+            if not url_service.validate_url(url):
+
+                return "Invalid URL"
+
+
+
+            html = url_service.fetch_content(url)
+
+
+
+            if html:
+
+
+                article = article_extractor.extract(
+                    html
+                )
+
+
+                if article:
+
+
+                    claim = article.get(
+                        "content"
+                    )
+
+
+
+                    # Save Database
+
+                    saved_article = article_service.save_article(
+
+                        title=article.get(
+                            "title",
+                            "Unknown"
+                        ),
+
+                        content=article.get(
+                            "content"
+                        ),
+
+                        url=url,
+
+                        source=url_service.get_domain(url)
+
+                    )
+
+
+
+                    # Save Vector DB
+
+                    vector_service.add_article(
+                        saved_article
+                    )
+
+
+
+        if not claim:
+
+            return "No input found"
+
+
+
+        return redirect(
+            url_for(
+                "verify",
+                text=claim
+            )
+        )
+
+
 
     return render_template(
         "index.html"
@@ -63,21 +172,25 @@ def home():
 
 
 # =========================
-# Verification Process
+# Verification
 # =========================
 
-@app.route(
-    "/verify",
-    methods=["POST"]
-)
+@app.route("/verify", methods=["GET","POST"])
 def verify():
 
 
-    # Get user input
+    if request.method == "GET":
 
-    text = request.form.get(
-        "text"
-    )
+        text = request.args.get(
+            "text"
+        )
+
+    else:
+
+        text = request.form.get(
+            "claim"
+        )
+
 
 
     if not text:
@@ -88,100 +201,63 @@ def verify():
 
 
 
-    # ---------------------
-    # Text Processing
-    # ---------------------
+    # RAG AI Verification
 
-    processor = MyanmarTextProcessor()
-
-
-    processed = processor.process(
+    result = verification_service.verify(
         text
     )
 
 
 
-    # ---------------------
-    # Spelling Check
-    # ---------------------
-
-    spell_checker = MyanmarSpellChecker()
-
-
-    corrections = spell_checker.check_text(
-        processed["cleaned"]
-    )
-
-
-
-    # ---------------------
     # Save History
-    # ---------------------
 
     history = VerificationHistory(
 
-        input_text=
-        processed["cleaned"],
+        input_text=text,
 
+        status=result.get(
+            "status"
+        ),
 
-        status=
-        "Processed",
+        confidence=result.get(
+            "confidence",
+            0
+        ),
 
-
-        confidence=
-        0.0,
-
-
-        explanation=
-        str({
-
-            "cleaned_text":
-            processed["cleaned"],
-
-
-            "sentences":
-            processed["sentences"],
-
-
-            "spelling":
-            corrections
-
-        })
+        explanation=str(result)
 
     )
 
 
-    db.session.add(
-        history
-    )
-
+    db.session.add(history)
 
     db.session.commit()
 
 
 
-    return redirect(
-        url_for(
-            "history"
-        )
+    return render_template(
+
+        "result.html",
+
+        result=result
+
     )
 
 
 
+
 # =========================
-# History Page
+# History
 # =========================
 
 @app.route("/history")
 def history():
-
 
     records = VerificationHistory.query.order_by(
 
         VerificationHistory.created_at.desc()
 
     ).all()
-
 
 
     return render_template(
@@ -195,7 +271,7 @@ def history():
 
 
 # =========================
-# Test Route
+# Test
 # =========================
 
 @app.route("/test")
@@ -203,9 +279,7 @@ def test():
 
     return {
 
-        "status":
-        "running",
-
+        "status":"running",
         "system":
         "Myanmar AI Fact Verification"
 
@@ -214,11 +288,10 @@ def test():
 
 
 # =========================
-# Run Server
+# Run
 # =========================
 
 if __name__ == "__main__":
-
 
     app.run(
 
