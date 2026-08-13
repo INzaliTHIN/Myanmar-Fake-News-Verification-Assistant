@@ -1,15 +1,20 @@
 <!DOCTYPE html>
-
-<html>
+<html lang="my">
 
 <head>
 
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <title>
-Myanmar AI Fact Checker
+Myanmar AI Fact Verification Assistant
 </title>
 
+
 <link rel="stylesheet"
-href="/static/style.css">
+href="{{ url_for('static', filename='style.css') }}">
+
 
 </head>
 
@@ -23,8 +28,9 @@ href="/static/style.css">
 <div class="header">
 
 <h1>
-📰 Myanmar AI Fact Checker
+📰 Myanmar AI Fact Verification Assistant
 </h1>
+
 
 <p>
 AI Powered Fake News Verification System
@@ -38,19 +44,17 @@ AI Powered Fake News Verification System
 
 
 <textarea
-name="claim"
-placeholder="Paste news text or URL here..."
+name="content"
+placeholder="Enter Myanmar text or public URL..."
 required></textarea>
 
 
-
-<button>
-🔍 Verify News
+<button type="submit">
+🔍 Verify
 </button>
 
 
 </form>
-
 
 
 
@@ -67,30 +71,13 @@ Verification Result
 
 
 
-{% if result.status == "Likely True" %}
+<h3>
+Status
+</h3>
 
-<div class="badge true">
-🟢 REAL NEWS
-</div>
-
-
-{% elif result.status == "Likely False" %}
-
-
-<div class="badge false">
-🔴 FAKE NEWS
-</div>
-
-
-{% else %}
-
-
-<div class="badge uncertain">
-🟡 UNCERTAIN
-</div>
-
-
-{% endif %}
+<p>
+{{ result.status }}
+</p>
 
 
 
@@ -99,24 +86,9 @@ Verification Result
 Confidence
 </h3>
 
-
-<div class="progress">
-
-    <div class="bar"
-         style="--confidence: {{ result.confidence }}%;">
-    </div>
-
-</div>
-
-</div>
-
-
-<p class="confidence">
-
-{{result.confidence}}%
-
+<p>
+{{ result.confidence }} %
 </p>
-
 
 
 
@@ -126,47 +98,102 @@ Evidence
 </h3>
 
 
-{% for item in result.evidence %}
+{% if result.evidence %}
 
+
+{% for item in result.evidence %}
 
 
 <div class="evidence-card">
 
 
 <h4>
-{{item.source}}
+{{ item.title }}
 </h4>
 
 
 <p>
-{{item.content}}
+{{ item.content }}
 </p>
 
 
+<p>
+<strong>Source:</strong>
+{{ item.source }}
+</p>
 
-{% if item.url %}
 
-<a href="{{item.url}}" target="_blank">
+<p>
+<strong>Match Score:</strong>
+{{ item.score }}
+</p>
 
-🔗 Open Source
+
+<a href="{{ item.url }}" target="_blank">
+
+Open Source
 
 </a>
 
-{% endif %}
-
 
 </div>
-
 
 
 {% endfor %}
 
 
 
+{% else %}
+
+<p>
+No evidence found
+</p>
+
+{% endif %}
+
+
+
+
+
+
+<h3>
+Impact
+</h3>
+
+<p>
+{{ result.impact }}
+</p>
+
+
+
+
+<h3>
+Insight
+</h3>
+
+<p>
+{{ result.insight }}
+</p>
+
+
+
+
+<h3>
+Explanation
+</h3>
+
+<p>
+{{ result.explanation }}
+</p>
+
+
+
+
 </div>
 
 
 {% endif %}
+
 
 
 
