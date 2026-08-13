@@ -1,36 +1,31 @@
 [
     {
         "name":"BBC Myanmar",
-        "domain":"bbc.com/burmese",
-        "type":"news",
+        "domain":"bbc.com",
         "trust_score":0.9
     },
 
     {
         "name":"DVB",
         "domain":"dvb.no",
-        "type":"news",
         "trust_score":0.85
     },
 
     {
         "name":"The Irrawaddy",
         "domain":"irrawaddy.com",
-        "type":"news",
         "trust_score":0.85
     },
 
     {
         "name":"Mizzima",
         "domain":"mizzima.com",
-        "type":"news",
         "trust_score":0.85
     },
 
     {
         "name":"Myanmar Now",
         "domain":"myanmar-now.org",
-        "type":"news",
         "trust_score":0.85
     }
 ]

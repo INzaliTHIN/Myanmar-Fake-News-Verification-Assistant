@@ -19,6 +19,7 @@ href="{{ url_for('static', filename='style.css') }}">
 </head>
 
 
+
 <body>
 
 
@@ -31,12 +32,13 @@ href="{{ url_for('static', filename='style.css') }}">
 📰 Myanmar AI Fact Verification Assistant
 </h1>
 
-
 <p>
 AI Powered Fake News Verification System
 </p>
 
 </div>
+
+
 
 
 
@@ -49,6 +51,7 @@ placeholder="Enter Myanmar text or public URL..."
 required></textarea>
 
 
+
 <button type="submit">
 🔍 Verify
 </button>
@@ -59,10 +62,14 @@ required></textarea>
 
 
 
+
+
+
 {% if result %}
 
 
 <div class="result-card">
+
 
 
 <h2>
@@ -71,13 +78,17 @@ Verification Result
 
 
 
-<h3>
-Status
-</h3>
+<div class="status-box">
+
+<h3>Status</h3>
 
 <p>
 {{ result.status }}
 </p>
+
+
+</div>
+
 
 
 
@@ -86,31 +97,90 @@ Status
 Confidence
 </h3>
 
-<p>
+
+<p class="confidence">
+
 {{ result.confidence }} %
+
 </p>
 
 
 
 
+
+
 <h3>
-Evidence
+Entities
 </h3>
+
+
+{% if result.entities %}
+
+
+<ul>
+
+{% for entity in result.entities %}
+
+
+<li>
+
+<strong>
+{{ entity.type }}
+</strong>
+
+:
+
+{{ entity.value }}
+
+
+</li>
+
+
+{% endfor %}
+
+</ul>
+
+
+{% else %}
+
+<p>
+No entity detected
+</p>
+
+{% endif %}
+
+
+
+
+
+
+
+<h3>
+Evidence Sources
+</h3>
+
+
 
 
 {% if result.evidence %}
 
 
+
 {% for item in result.evidence %}
 
 
-<div class="evidence-card">
 
+
+<div class="evidence-card">
 
 <h4>
 {{ item.title }}
 </h4>
 
+
+<p>
+<strong>Evidence:</strong>
+</p>
 
 <p>
 {{ item.content }}
@@ -124,56 +194,55 @@ Evidence
 
 
 <p>
-<strong>Match Score:</strong>
-{{ item.score }}
+<strong>Semantic Score:</strong>
+{{ item.semantic_score }}
+</p>
+
+
+<p>
+<strong>Lexical Score:</strong>
+{{ item.lexical_score }}
+</p>
+
+
+<p>
+<strong>Trust Score:</strong>
+{{ item.trust_score }}
+</p>
+
+
+<p>
+<strong>Final Verification Score:</strong>
+{{ item.final_score }}
 </p>
 
 
 <a href="{{ item.url }}" target="_blank">
-
-Open Source
-
+🔗 Open Source
 </a>
 
 
 </div>
 
 
+
 {% endfor %}
+
 
 
 
 {% else %}
 
+
 <p>
 No evidence found
 </p>
+
 
 {% endif %}
 
 
 
-
-
-
-<h3>
-Impact
-</h3>
-
-<p>
-{{ result.impact }}
-</p>
-
-
-
-
-<h3>
-Insight
-</h3>
-
-<p>
-{{ result.insight }}
-</p>
 
 
 
@@ -182,14 +251,19 @@ Insight
 Explanation
 </h3>
 
+
 <p>
+
 {{ result.explanation }}
+
 </p>
 
 
 
 
+
 </div>
+
 
 
 {% endif %}
@@ -197,9 +271,12 @@ Explanation
 
 
 
+
 </div>
 
 
+
 </body>
+
 
 </html>
