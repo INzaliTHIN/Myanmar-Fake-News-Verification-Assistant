@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="my">
 
 <head>
@@ -6,6 +7,7 @@
 <meta charset="UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 
 <title>
 Myanmar AI Fact Verification Assistant
@@ -17,7 +19,6 @@ href="{{ url_for('static', filename='style.css') }}">
 
 
 </head>
-
 
 
 <body>
@@ -32,12 +33,12 @@ href="{{ url_for('static', filename='style.css') }}">
 📰 Myanmar AI Fact Verification Assistant
 </h1>
 
+
 <p>
-AI Powered Fake News Verification System
+AI Based Fake News Verification System
 </p>
 
 </div>
-
 
 
 
@@ -46,14 +47,19 @@ AI Powered Fake News Verification System
 
 
 <textarea
+
 name="content"
-placeholder="Enter Myanmar text or public URL..."
+
+placeholder="Enter Myanmar news text or public URL..."
+
 required></textarea>
 
 
 
 <button type="submit">
+
 🔍 Verify
+
 </button>
 
 
@@ -63,13 +69,11 @@ required></textarea>
 
 
 
-
-
 {% if result %}
 
 
-<div class="result-card">
 
+<div class="result-card">
 
 
 <h2>
@@ -78,12 +82,18 @@ Verification Result
 
 
 
-<div class="status-box">
+<div class="box">
 
-<h3>Status</h3>
+
+<h3>
+Claim
+</h3>
+
 
 <p>
-{{ result.status }}
+
+{{ result.claim }}
+
 </p>
 
 
@@ -93,12 +103,29 @@ Verification Result
 
 
 
+
+<div class="box">
+
+
+<h3>
+Status
+</h3>
+
+
+<p class="status">
+
+{{ result.status }}
+
+</p>
+
+
+
 <h3>
 Confidence
 </h3>
 
 
-<p class="confidence">
+<p>
 
 {{ result.confidence }} %
 
@@ -106,7 +133,14 @@ Confidence
 
 
 
+</div>
 
+
+
+
+
+
+<div class="box">
 
 
 <h3>
@@ -114,51 +148,38 @@ Entities
 </h3>
 
 
-{% if result.entities %}
-
-
-<ul>
-
 {% for entity in result.entities %}
 
 
-<li>
+<p>
 
-<strong>
 {{ entity.type }}
-</strong>
 
 :
 
 {{ entity.value }}
 
-
-</li>
+</p>
 
 
 {% endfor %}
 
-</ul>
 
 
-{% else %}
-
-<p>
-No entity detected
-</p>
-
-{% endif %}
+</div>
 
 
 
 
 
+
+
+<div class="box">
 
 
 <h3>
 Evidence Sources
 </h3>
-
 
 
 
@@ -170,56 +191,104 @@ Evidence Sources
 
 
 
-
 <div class="evidence-card">
 
+
 <h4>
+
 {{ item.title }}
+
 </h4>
 
 
+
 <p>
-<strong>Evidence:</strong>
+
+{{ item.content[:500] }}
+
+...
+
 </p>
 
-<p>
-{{ item.content }}
-</p>
+
 
 
 <p>
-<strong>Source:</strong>
+
+<b>
+Source:
+</b>
+
 {{ item.source }}
+
 </p>
 
 
+
+
+
 <p>
-<strong>Semantic Score:</strong>
+
+<b>
+Semantic Score:
+</b>
+
 {{ item.semantic_score }}
+
 </p>
 
 
+
+
+
 <p>
-<strong>Lexical Score:</strong>
+
+<b>
+Lexical Score:
+</b>
+
 {{ item.lexical_score }}
+
 </p>
 
 
+
+
+
 <p>
-<strong>Trust Score:</strong>
+
+<b>
+Trust Score:
+</b>
+
 {{ item.trust_score }}
+
 </p>
+
+
+
 
 
 <p>
-<strong>Final Verification Score:</strong>
+
+<b>
+Final Score:
+</b>
+
 {{ item.final_score }}
+
 </p>
+
+
+
 
 
 <a href="{{ item.url }}" target="_blank">
+
 🔗 Open Source
+
 </a>
+
 
 
 </div>
@@ -230,12 +299,13 @@ Evidence Sources
 
 
 
-
 {% else %}
 
 
 <p>
-No evidence found
+
+No matching evidence found.
+
 </p>
 
 
@@ -243,8 +313,15 @@ No evidence found
 
 
 
+</div>
 
 
+
+
+
+
+
+<div class="box">
 
 
 <h3>
@@ -260,10 +337,13 @@ Explanation
 
 
 
+</div>
+
+
+
 
 
 </div>
-
 
 
 {% endif %}

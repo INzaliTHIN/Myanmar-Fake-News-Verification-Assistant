@@ -1,31 +1,57 @@
 [
     {
-        "name":"BBC Myanmar",
-        "domain":"bbc.com",
-        "trust_score":0.9
+        "name": "BBC Myanmar",
+        "domain": "bbc.com",
+        "trust_score": 0.9,
+        "type": "news"
     },
 
     {
-        "name":"DVB",
-        "domain":"dvb.no",
-        "trust_score":0.85
+        "name": "DVB",
+        "domain": "dvb.no",
+        "trust_score": 0.85,
+        "type": "news"
     },
 
     {
-        "name":"The Irrawaddy",
-        "domain":"irrawaddy.com",
-        "trust_score":0.85
+        "name": "The Irrawaddy",
+        "domain": "irrawaddy.com",
+        "trust_score": 0.85,
+        "type": "news"
     },
 
     {
-        "name":"Mizzima",
-        "domain":"mizzima.com",
-        "trust_score":0.85
+        "name": "Mizzima",
+        "domain": "mizzima.com",
+        "trust_score": 0.85,
+        "type": "news"
     },
 
     {
-        "name":"Myanmar Now",
-        "domain":"myanmar-now.org",
-        "trust_score":0.85
+        "name": "Myanmar Now",
+        "domain": "myanmar-now.org",
+        "trust_score": 0.85,
+        "type": "news"
+    },
+
+    {
+        "name": "Facebook",
+        "domain": "facebook.com",
+        "trust_score": 0.5,
+        "type": "social"
+    },
+
+    {
+        "name": "X",
+        "domain": "x.com",
+        "trust_score": 0.5,
+        "type": "social"
+    },
+
+    {
+        "name": "Telegram",
+        "domain": "t.me",
+        "trust_score": 0.5,
+        "type": "social"
     }
 ]
