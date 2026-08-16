@@ -1,57 +1,72 @@
 [
     {
         "name": "BBC Myanmar",
-        "domain": "bbc.com",
-        "trust_score": 0.9,
-        "type": "news"
+        "type": "media",
+        "domains": [
+            "bbc.com",
+            "bbc.co.uk",
+            "bbc.com/burmese"
+        ],
+        "trust_score": 0.90
     },
-
     {
         "name": "DVB",
-        "domain": "dvb.no",
-        "trust_score": 0.85,
-        "type": "news"
+        "type": "media",
+        "domains": [
+            "dvb.no"
+        ],
+        "trust_score": 0.85
     },
-
     {
         "name": "The Irrawaddy",
-        "domain": "irrawaddy.com",
-        "trust_score": 0.85,
-        "type": "news"
+        "type": "media",
+        "domains": [
+            "irrawaddy.com"
+        ],
+        "trust_score": 0.85
     },
-
     {
         "name": "Mizzima",
-        "domain": "mizzima.com",
-        "trust_score": 0.85,
-        "type": "news"
+        "type": "media",
+        "domains": [
+            "mizzima.com"
+        ],
+        "trust_score": 0.85
     },
-
     {
         "name": "Myanmar Now",
-        "domain": "myanmar-now.org",
-        "trust_score": 0.85,
-        "type": "news"
+        "type": "media",
+        "domains": [
+            "myanmar-now.org"
+        ],
+        "trust_score": 0.85
     },
-
     {
         "name": "Facebook",
-        "domain": "facebook.com",
-        "trust_score": 0.5,
-        "type": "social"
+        "type": "social_media",
+        "domains": [
+            "facebook.com",
+            "www.facebook.com"
+        ],
+        "trust_score": 0.70
     },
-
     {
         "name": "X",
-        "domain": "x.com",
-        "trust_score": 0.5,
-        "type": "social"
+        "type": "social_media",
+        "domains": [
+            "x.com",
+            "twitter.com"
+        ],
+        "trust_score": 0.70
     },
-
     {
         "name": "Telegram",
-        "domain": "t.me",
-        "trust_score": 0.5,
-        "type": "social"
+        "type": "social_media",
+        "domains": [
+            "t.me",
+            "telegram.me",
+            "telegram.org"
+        ],
+        "trust_score": 0.70
     }
 ]
