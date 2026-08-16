@@ -2,31 +2,29 @@ import os
 import re
 import json
 import logging
-import requests
-import numpy as np
-import unicodedata
-import base64
-
-from datetime import datetime, timezone
+from datetime import datetime
 from urllib.parse import (
-    urlparse,
     quote_plus,
+    urlparse,
     parse_qs,
     unquote
 )
+
+import requests
+import numpy as np
 
 from bs4 import BeautifulSoup
 
 from flask import (
     Flask,
-    render_template,
-    request
+    request,
+    jsonify,
+    render_template_string
 )
 
 from flask_sqlalchemy import SQLAlchemy
-from dotenv import load_dotenv
 
-from newspaper import Article
+import torch
 
 from sentence_transformers import SentenceTransformer
 
@@ -35,14 +33,10 @@ from transformers import (
     AutoModelForSequenceClassification
 )
 
-import torch
-
-
-# ============================================================
-# ENVIRONMENT
-# ============================================================
-
-load_dotenv()
+try:
+    from newspaper import Article
+except Exception:
+    Article = None
 
 
 # ============================================================
@@ -50,11 +44,6 @@ load_dotenv()
 # ============================================================
 
 app = Flask(__name__)
-
-app.config["SECRET_KEY"] = os.getenv(
-    "SECRET_KEY",
-    "secret"
-)
 
 app.config["SQLALCHEMY_DATABASE_URI"] = (
     "sqlite:///database.db"
@@ -66,7 +55,7 @@ db = SQLAlchemy(app)
 
 
 # ============================================================
-# DATABASE
+# DATABASE MODEL
 # ============================================================
 
 class History(db.Model):
@@ -82,11 +71,13 @@ class History(db.Model):
     )
 
     extracted_text = db.Column(
-        db.Text
+        db.Text,
+        nullable=True
     )
 
     result = db.Column(
-        db.Text
+        db.Text,
+        nullable=False
     )
 
     created_at = db.Column(
@@ -95,12 +86,17 @@ class History(db.Model):
     )
 
 
+# ============================================================
+# DATABASE INITIALIZATION
+# ============================================================
+
 with app.app_context():
+
     db.create_all()
 
 
 # ============================================================
-# AI MODELS
+# MODEL CONFIGURATION
 # ============================================================
 
 SEMANTIC_MODEL_NAME = (
@@ -113,6 +109,47 @@ NLI_MODEL_NAME = (
     "mDeBERTa-v3-base-mnli-xnli"
 )
 
+
+# ============================================================
+# LIMITS
+# ============================================================
+
+MAX_SEARCH_RESULTS = 20
+
+MAX_EVIDENCE = 8
+
+MAX_ARTICLE_CHARS = 12000
+
+MAX_SENTENCE_CHARS = 700
+
+
+# ============================================================
+# SEARCH HEADERS
+# ============================================================
+
+SEARCH_HEADERS = {
+
+    "User-Agent":
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/151.0.0.0 "
+        "Safari/537.36",
+
+    "Accept":
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,*/*;q=0.8",
+
+    "Accept-Language":
+        "en-US,en;q=0.9,my;q=0.8"
+
+}
+
+
+# ============================================================
+# MODELS
+# ============================================================
 
 print()
 print("=" * 70)
@@ -141,158 +178,15 @@ nli_model.eval()
 
 
 # ============================================================
-# SEARCH HEADERS
+# BASIC TEXT CLEANING
 # ============================================================
 
-SEARCH_HEADERS = {
+def clean_text(text):
 
-    "User-Agent":
-        (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/151.0.0.0 "
-            "Safari/537.36"
-        ),
-
-    "Accept":
-        (
-            "text/html,application/xhtml+xml,"
-            "application/xml;q=0.9,image/avif,"
-            "image/webp,*/*;q=0.8"
-        ),
-
-    "Accept-Language":
-        "my,en-US;q=0.9,en;q=0.8",
-
-    "Connection":
-        "keep-alive"
-
-}
-
-
-# ============================================================
-# TRUSTED DOMAINS
-# ============================================================
-
-TRUSTED_DOMAINS = [
-
-    # Myanmar government
-    "moi.gov.mm",
-    "myanmar.gov.mm",
-    "mrtv.gov.mm",
-    "mdn.gov.mm",
-    "ddm.gov.mm",
-    "myanmar-president-office.gov.mm",
-
-    # International / established news
-    "bbc.com",
-    "bbc.co.uk",
-    "rfa.org",
-    "voanews.com",
-
-    # Myanmar news
-    "irrawaddy.com",
-    "mizzima.com",
-    "elevenmyanmar.com",
-    "frontiermyanmar.net",
-    "dvb.no"
-
-]
-
-
-# ============================================================
-# BLOCKED DOMAINS
-# ============================================================
-
-BLOCKED_DOMAINS = [
-
-    "bing.com",
-    "google.com",
-    "duckduckgo.com",
-    "yahoo.com",
-
-    "facebook.com",
-    "youtube.com",
-    "instagram.com",
-    "tiktok.com",
-    "x.com",
-    "twitter.com",
-
-    "linkedin.com",
-
-]
-
-
-# ============================================================
-# DOMAIN QUALITY
-# ============================================================
-
-HIGH_TRUST_DOMAINS = [
-
-    "moi.gov.mm",
-    "ddm.gov.mm",
-    "myanmar.gov.mm",
-    "mrtv.gov.mm",
-    "myanmar-president-office.gov.mm",
-
-    "bbc.com",
-    "bbc.co.uk",
-    "rfa.org",
-    "voanews.com"
-
-]
-
-
-# ============================================================
-# GENERAL LIMITS
-# ============================================================
-
-MAX_SEARCH_RESULTS = 40
-
-MAX_EVIDENCE = 10
-
-MAX_ARTICLE_CHARS = 12000
-
-MAX_MODEL_CHARS = 5000
-
-MAX_SENTENCE_CHARS = 700
-
-
-# ============================================================
-# TEXT CLEANING
-# ============================================================
-
-def unicode_normalize(text):
-
-    if not text:
-        return ""
-
-    try:
-
-        return unicodedata.normalize(
-            "NFC",
-            str(text)
-        )
-
-    except Exception:
-
-        return str(text)
-
-
-def normalize_text(text):
-
-    if not text:
+    if text is None:
         return ""
 
     text = str(text)
-
-    text = re.sub(
-        r"<[^>]+>",
-        " ",
-        text
-    )
 
     text = re.sub(
         r"\s+",
@@ -303,48 +197,51 @@ def normalize_text(text):
     return text.strip()
 
 
-def clean_text(text):
+# ============================================================
+# SENTENCE SPLITTER
+# ============================================================
 
-    text = unicode_normalize(
+def sentence_split(text):
+
+    text = clean_text(text)
+
+    if not text:
+        return []
+
+    parts = re.split(
+        r"(?<=[.!?။！？])\s+",
         text
     )
 
-    text = normalize_text(
-        text
-    )
-
-    return text
+    return [
+        clean_text(x)
+        for x in parts
+        if clean_text(x)
+    ]
 
 
 # ============================================================
 # URL CHECK
 # ============================================================
 
-def is_url(text):
+def is_url(value):
 
-    if not text:
+    if not value:
         return False
 
-    try:
+    value = value.strip()
 
-        parsed = urlparse(
-            text.strip()
+    return bool(
+        re.match(
+            r"^https?://",
+            value,
+            re.IGNORECASE
         )
-
-        return (
-            parsed.scheme.lower()
-            in ("http", "https")
-            and
-            bool(parsed.netloc)
-        )
-
-    except Exception:
-
-        return False
+    )
 
 
 # ============================================================
-# DOMAIN HELPERS
+# DOMAIN
 # ============================================================
 
 def get_domain(url):
@@ -358,7 +255,13 @@ def get_domain(url):
             url
         )
 
-        domain = parsed.netloc.lower().strip()
+        domain = parsed.netloc.lower()
+
+        if "@" in domain:
+            domain = domain.split("@")[-1]
+
+        if ":" in domain:
+            domain = domain.split(":")[0]
 
         if domain.startswith("www."):
             domain = domain[4:]
@@ -370,79 +273,248 @@ def get_domain(url):
         return ""
 
 
+# ============================================================
+# SOCIAL DOMAINS
+# ============================================================
+
+SOCIAL_DOMAINS = {
+
+    "facebook.com",
+    "www.facebook.com",
+
+    "fb.com",
+    "www.fb.com",
+
+    "m.facebook.com",
+
+    "m.me",
+
+    "instagram.com",
+    "www.instagram.com",
+
+    "x.com",
+    "www.x.com",
+
+    "twitter.com",
+    "www.twitter.com"
+
+}
+
+
+# ============================================================
+# SOCIAL DOMAIN CHECK
+# ============================================================
+
+def is_social_domain(url):
+
+    domain = get_domain(
+        url
+    )
+
+    domain = domain.lower()
+
+    if domain in SOCIAL_DOMAINS:
+        return True
+
+    if domain.endswith(
+        ".facebook.com"
+    ):
+        return True
+
+    if domain.endswith(
+        ".instagram.com"
+    ):
+        return True
+
+    if domain.endswith(
+        ".twitter.com"
+    ):
+        return True
+
+    if domain.endswith(
+        ".x.com"
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# SOCIAL URL CHECK
+# ============================================================
+
+def is_social_url(url):
+
+    return is_social_domain(
+        url
+    )
+
+
+# ============================================================
+# VALID SOCIAL INPUT URL
+# ============================================================
+
+def valid_social_input_url(url):
+
+    if not is_url(url):
+        return False
+
+    return is_social_url(
+        url
+    )
+
+
+# ============================================================
+# BLOCKED SOCIAL RESULT URL
+# ============================================================
+
+def is_blocked_social_result(url):
+
+    if not url:
+        return True
+
+    domain = get_domain(
+        url
+    ).lower()
+
+    blocked = {
+
+        "facebook.com",
+        "www.facebook.com",
+
+        "m.facebook.com",
+
+        "fb.com",
+        "www.fb.com",
+
+        "m.me",
+
+        "instagram.com",
+        "www.instagram.com",
+
+        "x.com",
+        "www.x.com",
+
+        "twitter.com",
+        "www.twitter.com"
+
+    }
+
+    if domain in blocked:
+        return True
+
+    if domain.endswith(
+        ".facebook.com"
+    ):
+        return True
+
+    if domain.endswith(
+        ".instagram.com"
+    ):
+        return True
+
+    if domain.endswith(
+        ".twitter.com"
+    ):
+        return True
+
+    if domain.endswith(
+        ".x.com"
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# BLOCKED DOMAINS
+# ============================================================
+
+BLOCKED_DOMAINS = {
+
+    "m.me",
+    "facebook.com",
+    "www.facebook.com",
+    "fb.com",
+    "www.fb.com",
+
+    "instagram.com",
+    "www.instagram.com",
+
+    "twitter.com",
+    "www.twitter.com",
+
+    "x.com",
+    "www.x.com"
+
+}
+
+
+# ============================================================
+# BLOCKED DOMAIN CHECK
+# ============================================================
+
 def is_blocked_domain(url):
 
     domain = get_domain(
         url
-    )
+    ).lower()
 
-    if not domain:
-        return False
+    if domain in BLOCKED_DOMAINS:
+        return True
 
-    for blocked in BLOCKED_DOMAINS:
+    if domain.endswith(
+        ".facebook.com"
+    ):
+        return True
 
-        if (
-            domain == blocked
-            or
-            domain.endswith(
-                "." + blocked
-            )
-        ):
+    if domain.endswith(
+        ".instagram.com"
+    ):
+        return True
 
-            return True
+    if domain.endswith(
+        ".twitter.com"
+    ):
+        return True
 
-    return False
-
-
-def is_trusted_domain(url):
-
-    domain = get_domain(
-        url
-    )
-
-    if not domain:
-        return False
-
-    for trusted in TRUSTED_DOMAINS:
-
-        if (
-            domain == trusted
-            or
-            domain.endswith(
-                "." + trusted
-            )
-        ):
-
-            return True
+    if domain.endswith(
+        ".x.com"
+    ):
+        return True
 
     return False
 
-
-def is_high_trust_domain(url):
-
-    domain = get_domain(
-        url
-    )
-
-    if not domain:
-        return False
-
-    for trusted in HIGH_TRUST_DOMAINS:
-
-        if (
-            domain == trusted
-            or
-            domain.endswith(
-                "." + trusted
-            )
-        ):
-
-            return True
-
-    return False
 
 # ============================================================
-# BING REDIRECT URL RESOLVER
+# VALID RESULT URL
+# ============================================================
+
+def valid_result_url(url):
+
+    if not url:
+        return False
+
+    if not is_url(url):
+        return False
+
+    domain = get_domain(
+        url
+    )
+
+    if not domain:
+        return False
+
+    if is_blocked_domain(
+        url
+    ):
+        return False
+
+    return True
+
+
+# ============================================================
+# RESOLVE SEARCH URL
 # ============================================================
 
 def resolve_search_url(url):
@@ -451,33 +523,8 @@ def resolve_search_url(url):
         return ""
 
     url = unquote(
-        url.strip()
-    )
-
-    if not is_url(url):
-        return ""
-
-    domain = get_domain(
         url
-    )
-
-    # --------------------------------------------------------
-    # If this is already a normal website URL,
-    # do not touch it.
-    # --------------------------------------------------------
-
-    if domain not in (
-        "bing.com",
-        "www.bing.com"
-    ):
-
-        return url
-
-
-    # --------------------------------------------------------
-    # Bing redirect URLs normally contain:
-    # ?u=a1....
-    # --------------------------------------------------------
+    ).strip()
 
     try:
 
@@ -489,324 +536,223 @@ def resolve_search_url(url):
             parsed.query
         )
 
-        encoded_url = query.get(
-            "u",
-            [""]
-        )[0]
+        for key in [
+            "uddg",
+            "url",
+            "u"
+        ]:
 
+            if key in query:
 
-        if encoded_url:
+                candidate = query[key][0]
 
-            encoded_url = unquote(
-                encoded_url
-            )
-
-            if encoded_url.startswith(
-                "a1"
-            ):
-
-                encoded_url = encoded_url[2:]
-
-
-            # Base64 decode
-
-            try:
-
-                padding = (
-                    "="
-                    *
-                    (
-                        4
-                        -
-                        len(encoded_url) % 4
-                    ) % 4
+                candidate = unquote(
+                    candidate
                 )
 
-                decoded = base64.urlsafe_b64decode(
-                    encoded_url + padding
-                ).decode(
-                    "utf-8",
-                    errors="ignore"
-                )
+                if candidate.startswith(
+                    "http"
+                ):
 
-
-                if is_url(decoded):
-
-                    decoded_domain = get_domain(
-                        decoded
-                    )
-
-                    if (
-                        decoded_domain
-                        and
-                        decoded_domain
-                        not in BLOCKED_DOMAINS
-                    ):
-
-                        return decoded
-
-
-            except Exception:
-
-                pass
-
-
-        # ----------------------------------------------------
-        # Fallback: follow redirect
-        # ----------------------------------------------------
-
-        response = requests.get(
-
-            url,
-
-            headers=SEARCH_HEADERS,
-
-            timeout=10,
-
-            allow_redirects=True
-
-        )
-
-
-        final_url = response.url
-
-
-        if (
-            final_url
-            and
-            is_url(final_url)
-            and
-            not is_blocked_domain(final_url)
-        ):
-
-            return final_url
-
+                    return candidate
 
     except Exception:
-
         pass
 
-
-    return ""
+    return url
 
 
 # ============================================================
-# URL VALIDATION
+# TRUSTED DOMAINS
 # ============================================================
 
-def valid_result_url(url):
+HIGH_TRUST_DOMAINS = {
 
-    if not url:
-        return False
+    "who.int",
+    "www.who.int",
 
-    url = resolve_search_url(
-        url
-    )
+    "un.org",
+    "www.un.org",
 
-    if not url:
-        return False
+    "unesco.org",
+    "www.unesco.org",
 
-    if not is_url(url):
-        return False
+    "worldbank.org",
+    "www.worldbank.org",
 
-    if is_blocked_domain(url):
-        return False
+    "imf.org",
+    "www.imf.org",
+
+    "reuters.com",
+    "www.reuters.com",
+
+    "apnews.com",
+    "www.apnews.com",
+
+    "bbc.com",
+    "www.bbc.com",
+
+    "nature.com",
+    "www.nature.com",
+
+    "science.org",
+    "www.science.org",
+
+    "nih.gov",
+    "www.nih.gov",
+
+    "cdc.gov",
+    "www.cdc.gov",
+
+    "gov.uk",
+    "www.gov.uk",
+
+    "gov.mm",
+    "www.gov.mm"
+
+}
+
+
+TRUSTED_DOMAIN_KEYWORDS = {
+
+    "edu",
+    "ac",
+    "gov",
+
+    "who.int",
+    "un.org",
+    "reuters.com",
+    "apnews.com",
+    "bbc.com",
+
+    "nature.com",
+    "science.org",
+
+    "nih.gov",
+    "cdc.gov"
+
+}
+
+
+# ============================================================
+# HIGH TRUST
+# ============================================================
+
+def is_high_trust_domain(url):
 
     domain = get_domain(
         url
-    )
-
-    if not domain:
-        return False
-
-    # --------------------------------------------------------
-    # Reject obvious search pages
-    # --------------------------------------------------------
-
-    parsed = urlparse(
-        url
-    )
-
-    path = (
-        parsed.path
-        + "?"
-        + parsed.query
     ).lower()
 
+    if domain in HIGH_TRUST_DOMAINS:
+        return True
 
-    blocked_patterns = [
-
-        "/search",
-        "?q=",
-        "&q=",
-        "/results",
-        "/ck/",
-        "bing.com",
-        "google.com"
-
-    ]
-
-
-    for pattern in blocked_patterns:
-
-        if pattern in path:
-
-            return False
-
-
-    return True
+    return False
 
 
 # ============================================================
-# MYANMAR TOKENIZER
+# TRUSTED DOMAIN
 # ============================================================
 
-def myanmar_tokenize(text):
+def is_trusted_domain(url):
 
-    text = clean_text(
-        text
-    )
+    domain = get_domain(
+        url
+    ).lower()
 
-    if not text:
-        return []
+    if is_high_trust_domain(
+        url
+    ):
+        return True
 
+    for keyword in TRUSTED_DOMAIN_KEYWORDS:
 
-    text = text.lower()
-
-
-    tokens = re.findall(
-
-        r"[\u1000-\u109F]+|"
-        r"[A-Za-z]+|"
-        r"[0-9၀-၉]+",
-
-        text
-
-    )
-
-
-    result = []
-
-
-    for token in tokens:
-
-        token = token.strip()
-
-        if len(token) <= 1:
-            continue
-
-        result.append(
-            token
-        )
-
-
-    return result
-
-
-# ============================================================
-# SENTENCE SPLITTER
-# ============================================================
-
-def sentence_split(text):
-
-    text = clean_text(
-        text
-    )
-
-    if not text:
-        return []
-
-
-    # Myanmar sentence marker + English punctuation
-    parts = re.split(
-
-        r"[။!?！？\n]+",
-
-        text
-
-    )
-
-
-    sentences = []
-
-
-    for part in parts:
-
-        part = clean_text(
-            part
-        )
-
-        if len(part) >= 20:
-
-            sentences.append(
-                part
+        if (
+            domain.endswith(
+                "." + keyword
             )
+            or
+            domain == keyword
+            or
+            keyword in domain
+        ):
 
+            return True
 
-    return sentences
+    return False
 
 
 # ============================================================
 # CLAIM KEYWORDS
 # ============================================================
 
-def claim_keywords(claim):
+def claim_keywords(text):
 
-    tokens = myanmar_tokenize(
-        claim
+    text = clean_text(
+        text
+    ).lower()
+
+    if not text:
+        return []
+
+    words = re.findall(
+
+        r"[\u1000-\u109f]+|"
+        r"[a-zA-Z]{2,}|"
+        r"\d+",
+
+        text
+
     )
 
-    # Remove very generic words
     stop_words = {
 
-        "မှာ",
-        "သည်",
-        "ဖြစ်",
-        "နေ",
-        "တယ်",
-        "ပြီး",
-        "သော",
-        "အတွက်",
-        "ကို",
-        "က",
-        "နဲ့",
-        "နှင့်",
-        "တွင်",
-        "လည်း",
-        "ရှိ",
-        "မည်",
-        "နိုင်",
-        "ပြော",
-        "သည့်",
-        "ခဲ့",
-        "ပါ"
+        "the",
+        "this",
+        "that",
+        "with",
+        "from",
+        "have",
+        "has",
+        "been",
+        "were",
+        "was",
+        "are",
+        "and",
+        "for",
+        "into",
+        "about",
+        "which",
+        "will",
+        "would",
+        "could",
+        "should",
+
+        "is",
+        "in",
+        "of",
+        "to",
+        "a",
+        "an",
+        "on",
+        "at",
+        "by"
 
     }
 
+    return [
 
-    result = []
+        word
 
+        for word in words
 
-    for token in tokens:
+        if word not in stop_words
 
-        if token in stop_words:
-            continue
-
-        if len(token) < 2:
-            continue
-
-        if token not in result:
-
-            result.append(
-                token
-            )
-
-
-    return result
+    ]
 
 
 # ============================================================
-# SEARCH QUERY GENERATOR
+# BUILD SEARCH QUERIES
 # ============================================================
 
 def build_search_queries(claim):
@@ -818,73 +764,39 @@ def build_search_queries(claim):
     if not claim:
         return []
 
+    queries = [
 
-    queries = []
+        claim,
 
+        claim + " သတင်း",
 
-    # Main claim
+        claim + " မြန်မာ",
 
-    queries.append(
-        claim
-    )
+        claim + " 2026"
 
-
-    # Claim + news
-
-    queries.append(
-        claim + " သတင်း"
-    )
-
-
-    # Claim + Myanmar
-
-    queries.append(
-        claim + " မြန်မာ"
-    )
-
-
-    # Current year
-
-    current_year = datetime.now().year
-
-
-    queries.append(
-        claim
-        + " "
-        + str(current_year)
-    )
-
-
-    # Important keywords
+    ]
 
     keywords = claim_keywords(
         claim
     )
 
+    if keywords:
 
-    if len(keywords) >= 3:
-
-        compact = " ".join(
+        short_query = " ".join(
             keywords[:12]
         )
 
         queries.append(
-            compact
+            short_query
         )
-
 
         queries.append(
-            compact
-            + " သတင်း"
+            short_query + " သတင်း"
         )
 
-
-    # Remove duplicates
-
-    final_queries = []
+    unique = []
 
     seen = set()
-
 
     for query in queries:
 
@@ -892,10 +804,10 @@ def build_search_queries(claim):
             query
         )
 
+        key = query.lower()
+
         if not query:
             continue
-
-        key = query.lower()
 
         if key in seen:
             continue
@@ -904,40 +816,11 @@ def build_search_queries(claim):
             key
         )
 
-        final_queries.append(
+        unique.append(
             query
         )
 
-
-    return final_queries[:6]
-
-
-# ============================================================
-# SEARCH RESULT TEXT EXTRACTION
-# ============================================================
-
-def extract_search_result_text(result):
-
-    title = clean_text(
-        result.get(
-            "title",
-            ""
-        )
-    )
-
-    snippet = clean_text(
-        result.get(
-            "snippet",
-            ""
-        )
-    )
-
-
-    return clean_text(
-        title
-        + " "
-        + snippet
-    )
+    return unique[:6]
 
 
 # ============================================================
@@ -948,14 +831,12 @@ def search_duckduckgo(query):
 
     results = []
 
-
     try:
 
         url = (
             "https://html.duckduckgo.com/html/?q="
             + quote_plus(query)
         )
-
 
         response = requests.get(
 
@@ -967,11 +848,8 @@ def search_duckduckgo(query):
 
         )
 
-
         if response.status_code != 200:
-
             return []
-
 
         soup = BeautifulSoup(
 
@@ -980,7 +858,6 @@ def search_duckduckgo(query):
             "html.parser"
 
         )
-
 
         for result in soup.select(
             ".result"
@@ -993,14 +870,10 @@ def search_duckduckgo(query):
             if not link_node:
                 continue
 
-
             href = link_node.get(
                 "href",
                 ""
             )
-
-
-            # DDG redirect
 
             if href.startswith(
                 "//duckduckgo.com/l/"
@@ -1025,23 +898,19 @@ def search_duckduckgo(query):
 
                     href = ""
 
-
             href = unquote(
                 href
             )
 
-
             href = resolve_search_url(
                 href
             )
-
 
             if not valid_result_url(
                 href
             ):
 
                 continue
-
 
             title_node = result.select_one(
                 ".result__title"
@@ -1050,7 +919,6 @@ def search_duckduckgo(query):
             snippet_node = result.select_one(
                 ".result__snippet"
             )
-
 
             title = clean_text(
 
@@ -1068,7 +936,6 @@ def search_duckduckgo(query):
 
             )
 
-
             snippet = clean_text(
 
                 snippet_node.get_text(
@@ -1082,27 +949,24 @@ def search_duckduckgo(query):
 
             )
 
-
             if not title:
                 continue
-
 
             results.append({
 
                 "title":
-                title,
+                    title,
 
                 "url":
-                href,
+                    href,
 
                 "snippet":
-                snippet,
+                    snippet,
 
                 "engine":
-                "DuckDuckGo"
+                    "DuckDuckGo"
 
             })
-
 
     except Exception as e:
 
@@ -1111,8 +975,8 @@ def search_duckduckgo(query):
             e
         )
 
-
     return results
+
 
 # ============================================================
 # BING SEARCH
@@ -1122,7 +986,6 @@ def search_bing(query):
 
     results = []
 
-
     try:
 
         url = (
@@ -1131,7 +994,6 @@ def search_bing(query):
             + "&count=20"
             + "&setlang=my"
         )
-
 
         response = requests.get(
 
@@ -1143,11 +1005,8 @@ def search_bing(query):
 
         )
 
-
         if response.status_code != 200:
-
             return []
-
 
         soup = BeautifulSoup(
 
@@ -1156,7 +1015,6 @@ def search_bing(query):
             "html.parser"
 
         )
-
 
         for item in soup.select(
             "li.b_algo"
@@ -1169,24 +1027,20 @@ def search_bing(query):
             if not link:
                 continue
 
-
             href = link.get(
                 "href",
                 ""
             )
 
-
             href = resolve_search_url(
                 href
             )
-
 
             if not valid_result_url(
                 href
             ):
 
                 continue
-
 
             title = clean_text(
 
@@ -1197,11 +1051,9 @@ def search_bing(query):
 
             )
 
-
             snippet_node = item.select_one(
                 ".b_caption p"
             )
-
 
             snippet = clean_text(
 
@@ -1216,27 +1068,24 @@ def search_bing(query):
 
             )
 
-
             if not title:
                 continue
-
 
             results.append({
 
                 "title":
-                title,
+                    title,
 
                 "url":
-                href,
+                    href,
 
                 "snippet":
-                snippet,
+                    snippet,
 
                 "engine":
-                "Bing"
+                    "Bing"
 
             })
-
 
     except Exception as e:
 
@@ -1245,12 +1094,11 @@ def search_bing(query):
             e
         )
 
-
     return results
 
 
 # ============================================================
-# SEARCH RESULT DEDUPLICATION
+# NORMALIZE URL
 # ============================================================
 
 def normalize_url_for_compare(url):
@@ -1269,9 +1117,7 @@ def normalize_url_for_compare(url):
         if domain.startswith("www."):
             domain = domain[4:]
 
-
         path = parsed.path.rstrip("/")
-
 
         return (
             parsed.scheme.lower()
@@ -1310,9 +1156,12 @@ def search_result_quality(item):
         )
     )
 
+    if is_blocked_social_result(
+        url
+    ):
+        return 0.0
 
     score = 0.0
-
 
     if is_high_trust_domain(
         url
@@ -1326,11 +1175,9 @@ def search_result_quality(item):
 
         score += 0.35
 
-
     domain = get_domain(
         url
     )
-
 
     if domain.endswith(
         ".gov.mm"
@@ -1338,23 +1185,17 @@ def search_result_quality(item):
 
         score += 0.25
 
-
     elif domain.endswith(
         ".mm"
     ):
 
         score += 0.10
 
-
     if len(title) >= 10:
-
         score += 0.05
-
 
     if len(snippet) >= 50:
-
         score += 0.05
-
 
     return min(
         score,
@@ -1370,17 +1211,14 @@ def search_public_web(claim):
 
     all_results = []
 
-
     queries = build_search_queries(
         claim
     )
-
 
     print(
         "Search queries:",
         len(queries)
     )
-
 
     for query in queries:
 
@@ -1388,9 +1226,6 @@ def search_public_web(claim):
             "Searching:",
             query
         )
-
-
-        # DDG
 
         ddg_results = search_duckduckgo(
             query
@@ -1400,9 +1235,6 @@ def search_public_web(claim):
             ddg_results
         )
 
-
-        # Bing
-
         bing_results = search_bing(
             query
         )
@@ -1411,13 +1243,7 @@ def search_public_web(claim):
             bing_results
         )
 
-
-    # --------------------------------------------------------
-    # Deduplicate URLs
-    # --------------------------------------------------------
-
     unique = {}
-
 
     for item in all_results:
 
@@ -1426,49 +1252,57 @@ def search_public_web(claim):
             ""
         )
 
-
         url = resolve_search_url(
             url
         )
 
-
         if not valid_result_url(
             url
         ):
-
             continue
 
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # Never allow Facebook / m.me / Instagram / X
+        # search results into evidence.
+        # ----------------------------------------------------
+
+        if is_blocked_social_result(
+            url
+        ):
+            continue
 
         item["url"] = url
-
 
         key = normalize_url_for_compare(
             url
         )
 
-
         if not key:
             continue
 
-
         item["search_quality"] = round(
-            search_result_quality(item),
+
+            search_result_quality(
+                item
+            ),
+
             4
+
         )
 
+        if item["search_quality"] <= 0:
+            continue
 
         old = unique.get(
             key
         )
-
 
         if old is None:
 
             unique[key] = item
 
         else:
-
-            # Keep the better result
 
             if (
                 item["search_quality"]
@@ -1481,15 +1315,9 @@ def search_public_web(claim):
 
                 unique[key] = item
 
-
     results = list(
         unique.values()
     )
-
-
-    # --------------------------------------------------------
-    # Sort trusted sources first
-    # --------------------------------------------------------
 
     results.sort(
 
@@ -1513,12 +1341,10 @@ def search_public_web(claim):
 
     )
 
-
     print(
         "Valid web results:",
         len(results)
     )
-
 
     return results[:MAX_SEARCH_RESULTS]
 
@@ -1531,22 +1357,23 @@ def extract_article_date(soup):
 
     date_value = ""
 
-
-    # OpenGraph
-
     for attr_name in [
+
         "article:published_time",
         "article:modified_time"
+
     ]:
 
         meta = soup.find(
+
             "meta",
+
             attrs={
                 "property":
-                attr_name
+                    attr_name
             }
-        )
 
+        )
 
         if meta:
 
@@ -1560,27 +1387,29 @@ def extract_article_date(soup):
             if value:
 
                 date_value = value
+
                 break
-
-
-    # Standard meta
 
     if not date_value:
 
         for attr_name in [
+
             "datePublished",
             "date",
             "pubdate"
+
         ]:
 
             meta = soup.find(
+
                 "meta",
+
                 attrs={
                     "name":
-                    attr_name
+                        attr_name
                 }
-            )
 
+            )
 
             if meta:
 
@@ -1591,21 +1420,17 @@ def extract_article_date(soup):
                     )
                 )
 
-
                 if value:
 
                     date_value = value
+
                     break
-
-
-    # Time tag
 
     if not date_value:
 
         time_tag = soup.find(
             "time"
         )
-
 
         if time_tag:
 
@@ -1625,7 +1450,6 @@ def extract_article_date(soup):
 
             )
 
-
     return date_value
 
 
@@ -1638,35 +1462,31 @@ def parse_date_value(value):
     if not value:
         return None
 
-
     value = clean_text(
         value
     )
 
-
-    # ISO date
-
     try:
 
         return datetime.fromisoformat(
+
             value.replace(
                 "Z",
                 "+00:00"
             )
+
         )
 
     except Exception:
-
         pass
 
-
-    # YYYY-MM-DD
-
     match = re.search(
-        r"(20\d{2})[-/](\d{1,2})[-/](\d{1,2})",
-        value
-    )
 
+        r"(20\d{2})[-/](\d{1,2})[-/](\d{1,2})",
+
+        value
+
+    )
 
     if match:
 
@@ -1683,17 +1503,15 @@ def parse_date_value(value):
             )
 
         except Exception:
-
             pass
 
-
-    # English date
-
     for fmt in [
+
         "%B %d, %Y",
         "%b %d, %Y",
         "%d %B %Y",
         "%d %b %Y"
+
     ]:
 
         try:
@@ -1704,24 +1522,22 @@ def parse_date_value(value):
             )
 
         except Exception:
-
             pass
-
 
     return None
 
+
 # ============================================================
-# ARTICLE EXTRACTION
+# SOCIAL TEXT EXTRACTION
 # ============================================================
 
-def extract_article(url):
+def extract_social_text(url):
 
-    if not valid_result_url(
+    if not valid_social_input_url(
         url
     ):
 
         return None
-
 
     try:
 
@@ -1731,32 +1547,33 @@ def extract_article(url):
 
             headers=SEARCH_HEADERS,
 
-            timeout=20,
+            timeout=15,
 
             allow_redirects=True
 
         )
 
+        if response.status_code != 200:
 
-        response.raise_for_status()
+            print(
+                "Social page status:",
+                response.status_code
+            )
 
+            return None
 
         final_url = response.url
 
+        # ----------------------------------------------------
+        # IMPORTANT
+        # Final URL must still be social.
+        # ----------------------------------------------------
 
-        if not valid_result_url(
+        if not is_social_url(
             final_url
         ):
 
             return None
-
-
-        if is_blocked_domain(
-            final_url
-        ):
-
-            return None
-
 
         soup = BeautifulSoup(
 
@@ -1766,40 +1583,22 @@ def extract_article(url):
 
         )
 
+        for tag in soup.find_all([
 
-        # ----------------------------------------------------
-        # Remove unwanted HTML
-        # ----------------------------------------------------
+            "script",
+            "style",
+            "noscript",
+            "svg",
+            "iframe",
+            "video",
+            "audio",
+            "source"
 
-        for tag in soup.find_all(
-
-            [
-
-                "script",
-                "style",
-                "noscript",
-                "svg",
-                "nav",
-                "footer",
-                "header",
-                "form",
-                "aside",
-                "iframe",
-                "advertisement"
-
-            ]
-
-        ):
+        ]):
 
             tag.decompose()
 
-
-        # ----------------------------------------------------
-        # TITLE
-        # ----------------------------------------------------
-
         title = ""
-
 
         if soup.title:
 
@@ -1812,18 +1611,16 @@ def extract_article(url):
 
             )
 
-
         og_title = soup.find(
 
             "meta",
 
             attrs={
                 "property":
-                "og:title"
+                    "og:title"
             }
 
         )
-
 
         if og_title:
 
@@ -1844,13 +1641,267 @@ def extract_article(url):
 
             )
 
-
-        # ----------------------------------------------------
-        # DESCRIPTION
-        # ----------------------------------------------------
-
         description = ""
 
+        og_description = soup.find(
+
+            "meta",
+
+            attrs={
+                "property":
+                    "og:description"
+            }
+
+        )
+
+        if og_description:
+
+            description = clean_text(
+
+                og_description.get(
+                    "content",
+                    ""
+                )
+
+            )
+
+        if not description:
+
+            meta_description = soup.find(
+
+                "meta",
+
+                attrs={
+                    "name":
+                        "description"
+                }
+
+            )
+
+            if meta_description:
+
+                description = clean_text(
+
+                    meta_description.get(
+                        "content",
+                        ""
+                    )
+
+                )
+
+        visible_text = clean_text(
+
+            soup.get_text(
+                " ",
+                strip=True
+            )
+
+        )
+
+        candidates = []
+
+        if description:
+            candidates.append(
+                description
+            )
+
+        if visible_text:
+            candidates.append(
+                visible_text
+            )
+
+        post_text = ""
+
+        for candidate in candidates:
+
+            candidate = clean_text(
+                candidate
+            )
+
+            if len(candidate) > len(
+                post_text
+            ):
+
+                post_text = candidate
+
+        # ----------------------------------------------------
+        # Reject Facebook generic homepage text.
+        # ----------------------------------------------------
+
+        generic_social_text = [
+
+            "Connect with friends and the world around you on Facebook.",
+
+            "Facebook helps you connect and share with the people in your life.",
+
+            "Log in or sign up to Facebook."
+
+        ]
+
+        if post_text in generic_social_text:
+
+            return None
+
+        if len(post_text) > MAX_ARTICLE_CHARS:
+
+            post_text = post_text[
+                :MAX_ARTICLE_CHARS
+            ]
+
+        if len(post_text) < 40:
+
+            return None
+
+        return {
+
+            "title":
+                title,
+
+            "content":
+                post_text,
+
+            "description":
+                description,
+
+            "source":
+                get_domain(final_url),
+
+            "domain":
+                get_domain(final_url),
+
+            "url":
+                final_url,
+
+            "date":
+                "",
+
+            "social":
+                True
+
+        }
+
+    except Exception as e:
+
+        print(
+            "Social extraction error:",
+            e
+        )
+
+        return None
+
+
+# ============================================================
+# ARTICLE EXTRACTION
+# ============================================================
+
+def extract_article(url):
+
+    if not valid_result_url(
+        url
+    ):
+
+        return None
+
+    try:
+
+        response = requests.get(
+
+            url,
+
+            headers=SEARCH_HEADERS,
+
+            timeout=20,
+
+            allow_redirects=True
+
+        )
+
+        response.raise_for_status()
+
+        final_url = response.url
+
+        if not valid_result_url(
+            final_url
+        ):
+
+            return None
+
+        if is_blocked_domain(
+            final_url
+        ):
+
+            return None
+
+        soup = BeautifulSoup(
+
+            response.text,
+
+            "html.parser"
+
+        )
+
+        for tag in soup.find_all([
+
+            "script",
+            "style",
+            "noscript",
+            "svg",
+            "nav",
+            "footer",
+            "header",
+            "form",
+            "aside",
+            "iframe",
+            "advertisement"
+
+        ]):
+
+            tag.decompose()
+
+        title = ""
+
+        if soup.title:
+
+            title = clean_text(
+
+                soup.title.get_text(
+                    " ",
+                    strip=True
+                )
+
+            )
+
+        og_title = soup.find(
+
+            "meta",
+
+            attrs={
+                "property":
+                    "og:title"
+            }
+
+        )
+
+        if og_title:
+
+            title = (
+
+                clean_text(
+
+                    og_title.get(
+                        "content",
+                        ""
+                    )
+
+                )
+
+                or
+
+                title
+
+            )
+
+        description = ""
 
         meta_description = soup.find(
 
@@ -1858,11 +1909,10 @@ def extract_article(url):
 
             attrs={
                 "name":
-                "description"
+                    "description"
             }
 
         )
-
 
         if meta_description:
 
@@ -1875,27 +1925,15 @@ def extract_article(url):
 
             )
 
-
-        # ----------------------------------------------------
-        # DATE
-        # ----------------------------------------------------
-
         published_date = extract_article_date(
             soup
         )
-
-
-        # ----------------------------------------------------
-        # ARTICLE PARAGRAPHS
-        # ----------------------------------------------------
 
         paragraphs = soup.find_all(
             "p"
         )
 
-
         paragraph_text = []
-
 
         for p in paragraphs:
 
@@ -1908,46 +1946,34 @@ def extract_article(url):
 
             )
 
-
-            # Avoid tiny menu-like text
-
             if len(value) < 25:
                 continue
 
-
-            # Avoid obvious navigation
-
             if value.lower() in [
+
                 "home",
                 "menu",
                 "search",
                 "login",
                 "subscribe"
+
             ]:
 
                 continue
-
 
             paragraph_text.append(
                 value
             )
 
-
         content = " ".join(
             paragraph_text
         )
-
-
-        # ----------------------------------------------------
-        # ARTICLE TAG FALLBACK
-        # ----------------------------------------------------
 
         if len(content) < 300:
 
             article_tag = soup.find(
                 "article"
             )
-
 
             if article_tag:
 
@@ -1960,19 +1986,17 @@ def extract_article(url):
 
                 )
 
-
                 if len(article_text) > len(
                     content
                 ):
 
                     content = article_text
 
-
-        # ----------------------------------------------------
-        # NEWSPAPER3K FALLBACK
-        # ----------------------------------------------------
-
-        if len(content) < 300:
+        if (
+            len(content) < 300
+            and
+            Article is not None
+        ):
 
             try:
 
@@ -1984,11 +2008,8 @@ def extract_article(url):
 
                 )
 
-
                 article.download()
-
                 article.parse()
-
 
                 if article.title:
 
@@ -1996,20 +2017,15 @@ def extract_article(url):
                         article.title
                     )
 
-
                 newspaper_text = clean_text(
-
                     article.text
-
                 )
-
 
                 if len(newspaper_text) > len(
                     content
                 ):
 
                     content = newspaper_text
-
 
             except Exception as e:
 
@@ -2019,20 +2035,13 @@ def extract_article(url):
                     e
                 )
 
-
-        # ----------------------------------------------------
-        # Final cleaning
-        # ----------------------------------------------------
-
         content = clean_text(
             content
         )
 
-
         if len(content) < 80:
 
             return None
-
 
         if len(content) > MAX_ARTICLE_CHARS:
 
@@ -2040,37 +2049,34 @@ def extract_article(url):
                 :MAX_ARTICLE_CHARS
             ]
 
-
         domain = get_domain(
             final_url
         )
 
-
         return {
 
             "title":
-            title,
+                title,
 
             "content":
-            content,
+                content,
 
             "description":
-            description,
+                description,
 
             "source":
-            domain,
+                domain,
 
             "domain":
-            domain,
+                domain,
 
             "url":
-            final_url,
+                final_url,
 
             "date":
-            published_date
+                published_date
 
         }
-
 
     except Exception as e:
 
@@ -2080,12 +2086,11 @@ def extract_article(url):
             e
         )
 
-
         return None
 
 
 # ============================================================
-# ARTICLE SENTENCE / CHUNK GENERATOR
+# ARTICLE CHUNKS
 # ============================================================
 
 def make_evidence_chunks(content):
@@ -2097,24 +2102,16 @@ def make_evidence_chunks(content):
     if not content:
         return []
 
-
     sentences = sentence_split(
         content
     )
 
-
     chunks = []
-
-
-    # --------------------------------------------------------
-    # Individual sentences
-    # --------------------------------------------------------
 
     for sentence in sentences:
 
         if len(sentence) < 25:
             continue
-
 
         if len(sentence) > MAX_SENTENCE_CHARS:
 
@@ -2122,15 +2119,9 @@ def make_evidence_chunks(content):
                 :MAX_SENTENCE_CHARS
             ]
 
-
         chunks.append(
             sentence
         )
-
-
-    # --------------------------------------------------------
-    # Two-sentence chunks
-    # --------------------------------------------------------
 
     for i in range(
         len(sentences) - 1
@@ -2144,13 +2135,11 @@ def make_evidence_chunks(content):
 
         )
 
-
         if len(combined) > 1000:
 
             combined = combined[
                 :1000
             ]
-
 
         if len(combined) >= 40:
 
@@ -2158,15 +2147,9 @@ def make_evidence_chunks(content):
                 combined
             )
 
-
-    # --------------------------------------------------------
-    # Remove duplicates
-    # --------------------------------------------------------
-
     unique = []
 
     seen = set()
-
 
     for chunk in chunks:
 
@@ -2182,7 +2165,6 @@ def make_evidence_chunks(content):
         unique.append(
             chunk
         )
-
 
     return unique
 
@@ -2206,11 +2188,9 @@ def semantic_similarity(
             evidence
         )
 
-
         if not claim or not evidence:
 
             return 0.0
-
 
         vectors = semantic_model.encode(
 
@@ -2225,7 +2205,6 @@ def semantic_similarity(
 
         )
 
-
         score = float(
 
             np.dot(
@@ -2238,7 +2217,6 @@ def semantic_similarity(
 
         )
 
-
         return max(
 
             0.0,
@@ -2249,7 +2227,6 @@ def semantic_similarity(
             )
 
         )
-
 
     except Exception as e:
 
@@ -2273,18 +2250,14 @@ def snippet_similarity(
     if not snippet:
         return 0.0
 
-
     return semantic_similarity(
-
         claim,
-
         snippet
-
     )
 
 
 # ============================================================
-# FIND BEST EVIDENCE CHUNKS
+# BEST CHUNKS
 # ============================================================
 
 def select_best_chunks(
@@ -2297,13 +2270,10 @@ def select_best_chunks(
         content
     )
 
-
     if not chunks:
         return []
 
-
     scored = []
-
 
     for chunk in chunks:
 
@@ -2315,29 +2285,27 @@ def select_best_chunks(
 
         )
 
-
         scored.append({
 
             "text":
-            chunk,
+                chunk,
 
             "score":
-            score
+                score
 
         })
-
 
     scored.sort(
 
         key=lambda x:
-        x["score"],
+            x["score"],
 
         reverse=True
 
     )
 
-
     return scored[:limit]
+
 
 # ============================================================
 # NLI LABEL INDEX
@@ -2347,7 +2315,6 @@ def get_nli_label_indexes():
 
     labels = {}
 
-
     for index, label in (
         nli_model.config.id2label.items()
     ):
@@ -2356,15 +2323,9 @@ def get_nli_label_indexes():
             str(label).lower()
         ] = int(index)
 
-
     entailment_index = None
     contradiction_index = None
     neutral_index = None
-
-
-    # --------------------------------------------------------
-    # Search actual model labels
-    # --------------------------------------------------------
 
     for label, index in labels.items():
 
@@ -2372,39 +2333,27 @@ def get_nli_label_indexes():
 
             entailment_index = index
 
-
         elif "contrad" in label:
 
             contradiction_index = index
-
 
         elif "neutral" in label:
 
             neutral_index = index
 
-
-    # --------------------------------------------------------
-    # Fallback for standard 3-label NLI
-    # --------------------------------------------------------
-
     if entailment_index is None:
         entailment_index = 2
-
 
     if contradiction_index is None:
         contradiction_index = 0
 
-
     if neutral_index is None:
         neutral_index = 1
-
 
     return (
 
         contradiction_index,
-
         neutral_index,
-
         entailment_index
 
     )
@@ -2429,34 +2378,28 @@ def nli_prediction(
             evidence
         )
 
-
         if not claim or not evidence:
 
             return {
 
                 "label":
-                "neutral",
+                    "neutral",
 
                 "entailment":
-                0.0,
+                    0.0,
 
                 "contradiction":
-                0.0,
+                    0.0,
 
                 "neutral":
-                1.0
+                    1.0
 
             }
 
-
-        # ====================================================
-        # IMPORTANT
-        #
-        # Premise = EVIDENCE
-        # Hypothesis = CLAIM
-        #
-        # This was reversed in the old code.
-        # ====================================================
+        # ----------------------------------------------------
+        # Premise = Evidence
+        # Hypothesis = Claim
+        # ----------------------------------------------------
 
         inputs = nli_tokenizer(
 
@@ -2472,13 +2415,11 @@ def nli_prediction(
 
         )
 
-
         with torch.no_grad():
 
             output = nli_model(
                 **inputs
             )
-
 
         probabilities = torch.softmax(
 
@@ -2488,34 +2429,26 @@ def nli_prediction(
 
         )[0]
 
-
         (
 
             contradiction_index,
-
             neutral_index,
-
             entailment_index
 
         ) = get_nli_label_indexes()
-
 
         num_labels = len(
             probabilities
         )
 
-
         if contradiction_index >= num_labels:
             contradiction_index = 0
-
 
         if neutral_index >= num_labels:
             neutral_index = 1
 
-
         if entailment_index >= num_labels:
             entailment_index = 2
-
 
         contradiction = float(
 
@@ -2525,7 +2458,6 @@ def nli_prediction(
 
         )
 
-
         neutral = float(
 
             probabilities[
@@ -2533,7 +2465,6 @@ def nli_prediction(
             ]
 
         )
-
 
         entailment = float(
 
@@ -2543,20 +2474,18 @@ def nli_prediction(
 
         )
 
-
         scores = {
 
             "entailment":
-            entailment,
+                entailment,
 
             "contradiction":
-            contradiction,
+                contradiction,
 
             "neutral":
-            neutral
+                neutral
 
         }
-
 
         label = max(
 
@@ -2566,32 +2495,30 @@ def nli_prediction(
 
         )
 
-
         return {
 
             "label":
-            label,
+                label,
 
             "entailment":
-            round(
-                entailment,
-                4
-            ),
+                round(
+                    entailment,
+                    4
+                ),
 
             "contradiction":
-            round(
-                contradiction,
-                4
-            ),
+                round(
+                    contradiction,
+                    4
+                ),
 
             "neutral":
-            round(
-                neutral,
-                4
-            )
+                round(
+                    neutral,
+                    4
+                )
 
         }
-
 
     except Exception as e:
 
@@ -2600,20 +2527,19 @@ def nli_prediction(
             e
         )
 
-
         return {
 
             "label":
-            "neutral",
+                "neutral",
 
             "entailment":
-            0.0,
+                0.0,
 
             "contradiction":
-            0.0,
+                0.0,
 
             "neutral":
-            1.0
+                1.0
 
         }
 
@@ -2628,22 +2554,15 @@ def source_quality_score(url):
         url
     )
 
-
     if not domain:
         return 0.0
-
 
     if is_blocked_domain(
         url
     ):
-
         return 0.0
 
-
     score = 0.0
-
-
-    # High trust
 
     if is_high_trust_domain(
         url
@@ -2651,15 +2570,11 @@ def source_quality_score(url):
 
         score = 0.90
 
-
     elif is_trusted_domain(
         url
     ):
 
         score = 0.70
-
-
-    # Myanmar domain
 
     if domain.endswith(
         ".mm"
@@ -2667,19 +2582,19 @@ def source_quality_score(url):
 
         score += 0.10
 
-
-    # Government
-
     if (
+
         domain.endswith(
             ".gov.mm"
         )
+
         or
+
         ".gov." in domain
+
     ):
 
         score += 0.10
-
 
     return min(
         score,
@@ -2688,28 +2603,20 @@ def source_quality_score(url):
 
 
 # ============================================================
-# SOURCE FRESHNESS
+# FRESHNESS
 # ============================================================
 
 def freshness_score(date_value):
 
     if not date_value:
-
-        # Unknown date should NOT get
-        # a large advantage.
-
         return 0.35
-
 
     parsed = parse_date_value(
         date_value
     )
 
-
     if parsed is None:
-
         return 0.35
-
 
     if parsed.tzinfo:
 
@@ -2717,45 +2624,29 @@ def freshness_score(date_value):
             tzinfo=None
         )
 
-
     now = datetime.now()
-
 
     days = (
         now - parsed
     ).days
 
-
-    # Future / malformed
-
     if days < 0:
-
         return 0.50
-
-
-    # Current
 
     if days <= 3:
         return 1.00
 
-
     if days <= 7:
         return 0.90
-
 
     if days <= 30:
         return 0.75
 
-
     if days <= 90:
         return 0.55
 
-
     if days <= 365:
         return 0.30
-
-
-    # Old article
 
     return 0.10
 
@@ -2787,7 +2678,6 @@ def relevance_score(
 
     )
 
-
     contradiction = float(
 
         nli.get(
@@ -2797,7 +2687,6 @@ def relevance_score(
 
     )
 
-
     nli_relevance = max(
 
         entailment,
@@ -2805,17 +2694,6 @@ def relevance_score(
         contradiction
 
     )
-
-
-    # --------------------------------------------------------
-    # Main score
-    #
-    # Semantic = whether article passage is about claim
-    # NLI = whether passage supports/contradicts
-    # Snippet = search engine relevance
-    # Quality = reliability
-    # Freshness = important for current claims
-    # --------------------------------------------------------
 
     score = (
 
@@ -2839,7 +2717,6 @@ def relevance_score(
 
     )
 
-
     return max(
 
         0.0,
@@ -2853,7 +2730,7 @@ def relevance_score(
 
 
 # ============================================================
-# CLAIM / EVIDENCE KEYWORD OVERLAP
+# KEYWORD OVERLAP
 # ============================================================
 
 def keyword_overlap(
@@ -2867,24 +2744,20 @@ def keyword_overlap(
         )
     )
 
-
     evidence_words = set(
         claim_keywords(
             evidence
         )
     )
 
-
     if not claim_words:
         return 0.0
-
 
     common = (
         claim_words
         &
         evidence_words
     )
-
 
     return min(
 
@@ -2911,10 +2784,8 @@ def prepare_web_evidence(
 
     evidence = []
 
-
     if not search_results:
         return []
-
 
     for index, item in enumerate(
 
@@ -2929,34 +2800,32 @@ def prepare_web_evidence(
             ""
         )
 
-
         if not valid_result_url(
             url
         ):
-
             continue
 
+        # ----------------------------------------------------
+        # Extra protection against social results
+        # ----------------------------------------------------
+
+        if is_blocked_social_result(
+            url
+        ):
+            continue
 
         domain = get_domain(
             url
         )
-
 
         print(
             f"Reading source {index}:",
             domain
         )
 
-
         article = extract_article(
             url
         )
-
-
-        # ----------------------------------------------------
-        # If article cannot be extracted,
-        # snippet can be used only as weak evidence.
-        # ----------------------------------------------------
 
         if not article:
 
@@ -2969,7 +2838,6 @@ def prepare_web_evidence(
 
             )
 
-
             title = clean_text(
 
                 item.get(
@@ -2979,37 +2847,33 @@ def prepare_web_evidence(
 
             )
 
-
             if len(snippet) < 50:
-
                 continue
-
 
             article = {
 
                 "title":
-                title,
+                    title,
 
                 "content":
-                snippet,
+                    snippet,
 
                 "description":
-                snippet,
+                    snippet,
 
                 "source":
-                domain,
+                    domain,
 
                 "domain":
-                domain,
+                    domain,
 
                 "url":
-                url,
+                    url,
 
                 "date":
-                ""
+                    ""
 
             }
-
 
         content = clean_text(
 
@@ -3020,17 +2884,8 @@ def prepare_web_evidence(
 
         )
 
-
         if len(content) < 30:
-
             continue
-
-
-        # ----------------------------------------------------
-        # Select the MOST RELEVANT passages.
-        #
-        # Do NOT send the entire article to NLI.
-        # ----------------------------------------------------
 
         best_chunks = select_best_chunks(
 
@@ -3042,28 +2897,18 @@ def prepare_web_evidence(
 
         )
 
-
         if not best_chunks:
-
             continue
 
-
         best_chunk = best_chunks[0]
-
 
         best_text = best_chunk[
             "text"
         ]
 
-
         semantic = best_chunk[
             "score"
         ]
-
-
-        # ----------------------------------------------------
-        # NLI on the best relevant passage
-        # ----------------------------------------------------
 
         nli = nli_prediction(
 
@@ -3072,11 +2917,6 @@ def prepare_web_evidence(
             best_text
 
         )
-
-
-        # ----------------------------------------------------
-        # Search snippet relevance
-        # ----------------------------------------------------
 
         snippet_score = snippet_similarity(
 
@@ -3089,11 +2929,6 @@ def prepare_web_evidence(
 
         )
 
-
-        # ----------------------------------------------------
-        # Keyword overlap
-        # ----------------------------------------------------
-
         overlap = keyword_overlap(
 
             claim,
@@ -3102,34 +2937,18 @@ def prepare_web_evidence(
 
         )
 
-
-        # ----------------------------------------------------
-        # Source quality
-        # ----------------------------------------------------
-
         quality = source_quality_score(
             url
         )
-
-
-        # ----------------------------------------------------
-        # Freshness
-        # ----------------------------------------------------
 
         article_date = article.get(
             "date",
             ""
         )
 
-
         freshness = freshness_score(
             article_date
         )
-
-
-        # ----------------------------------------------------
-        # Final retrieval score
-        # ----------------------------------------------------
 
         retrieval = relevance_score(
 
@@ -3144,11 +2963,6 @@ def prepare_web_evidence(
             freshness
 
         )
-
-
-        # ----------------------------------------------------
-        # Strong relevance filter
-        # ----------------------------------------------------
 
         relevant_enough = (
 
@@ -3172,25 +2986,24 @@ def prepare_web_evidence(
 
         )
 
-
         if not relevant_enough:
 
             print(
+
                 "Skipped irrelevant:",
+
                 domain,
+
                 "semantic=",
+
                 round(
                     semantic,
                     3
                 )
+
             )
 
             continue
-
-
-        # ----------------------------------------------------
-        # Weak NLI + weak semantic = reject
-        # ----------------------------------------------------
 
         if (
 
@@ -3216,110 +3029,103 @@ def prepare_web_evidence(
 
             continue
 
-
         evidence.append({
 
             "title":
-            article.get(
-                "title",
-                ""
-            )
-            or
-            item.get(
-                "title",
-                ""
-            ),
+                article.get(
+                    "title",
+                    ""
+                )
+                or
+                item.get(
+                    "title",
+                    ""
+                ),
 
             "content":
-            content,
+                content,
 
             "best_evidence":
-            best_text,
+                best_text,
 
             "source":
-            article.get(
-                "source",
-                domain
-            ),
+                article.get(
+                    "source",
+                    domain
+                ),
 
             "domain":
-            article.get(
-                "domain",
-                domain
-            ),
+                article.get(
+                    "domain",
+                    domain
+                ),
 
             "url":
-            article.get(
-                "url",
-                url
-            ),
+                article.get(
+                    "url",
+                    url
+                ),
 
             "snippet":
-            item.get(
-                "snippet",
-                ""
-            ),
+                item.get(
+                    "snippet",
+                    ""
+                ),
 
             "engine":
-            item.get(
-                "engine",
-                ""
-            ),
+                item.get(
+                    "engine",
+                    ""
+                ),
 
             "date":
-            article_date,
+                article_date,
 
             "source_quality":
-            round(
-                quality,
-                4
-            ),
+                round(
+                    quality,
+                    4
+                ),
 
             "freshness":
-            round(
-                freshness,
-                4
-            ),
+                round(
+                    freshness,
+                    4
+                ),
 
             "keyword_overlap":
-            round(
-                overlap,
-                4
-            ),
+                round(
+                    overlap,
+                    4
+                ),
 
             "semantic_score":
-            round(
-                semantic,
-                4
-            ),
+                round(
+                    semantic,
+                    4
+                ),
 
             "entailment":
-            nli["entailment"],
+                nli["entailment"],
 
             "contradiction":
-            nli["contradiction"],
+                nli["contradiction"],
 
             "neutral":
-            nli["neutral"],
+                nli["neutral"],
 
             "nli_label":
-            nli["label"],
+                nli["label"],
 
             "retrieval_score":
-            round(
-                retrieval,
-                4
-            )
+                round(
+                    retrieval,
+                    4
+                )
 
         })
 
-
-    # --------------------------------------------------------
-    # Deduplicate
-    # --------------------------------------------------------
-
     unique = {}
-
 
     for item in evidence:
 
@@ -3328,25 +3134,20 @@ def prepare_web_evidence(
             ""
         )
 
-
         key = normalize_url_for_compare(
             url
         )
 
-
         if not key:
             continue
-
 
         old = unique.get(
             key
         )
 
-
         if old is None:
 
             unique[key] = item
-
 
         elif (
 
@@ -3364,15 +3165,9 @@ def prepare_web_evidence(
 
             unique[key] = item
 
-
     evidence = list(
         unique.values()
     )
-
-
-    # --------------------------------------------------------
-    # Sort
-    # --------------------------------------------------------
 
     evidence.sort(
 
@@ -3399,16 +3194,13 @@ def prepare_web_evidence(
 
     )
 
-
     print(
         "Final relevant evidence:",
         len(evidence)
     )
 
+    return evidence[:MAX_EVIDENCE]
 
-    return evidence[
-        :MAX_EVIDENCE
-    ]
 
 # ============================================================
 # CLASSIFY RESULT
@@ -3421,106 +3213,64 @@ def classify_result(evidence):
         return (
 
             "Unverified",
-
             0,
-
             0.0,
-
             0.0,
-
             1.0
 
         )
 
-
     supporting = 0.0
-
     contradicting = 0.0
-
     neutral = 0.0
 
-
     usable = []
-
-
-    # ========================================================
-    # FILTER WEAK EVIDENCE
-    # ========================================================
 
     for item in evidence:
 
         semantic = float(
-
             item.get(
                 "semantic_score",
                 0
-            )
-
+            ) or 0
         )
 
-
         retrieval = float(
-
             item.get(
                 "retrieval_score",
                 0
-            )
-
+            ) or 0
         )
 
-
         quality = float(
-
             item.get(
                 "source_quality",
                 0
-            )
-
+            ) or 0
         )
 
-
         entailment = float(
-
             item.get(
                 "entailment",
                 0
-            )
-
+            ) or 0
         )
 
-
         contradiction = float(
-
             item.get(
                 "contradiction",
                 0
-            )
-
+            ) or 0
         )
 
-
-        # Evidence must have actual relevance.
-
         if semantic < 0.25:
-
             continue
-
 
         if retrieval < 0.25:
-
             continue
 
-
-        # For low quality source, demand stronger semantic match.
-
-        if quality < 0.50:
-
-            if semantic < 0.40:
-
-                continue
-
-
-        # NLI should have meaningful signal.
+        if quality < 0.50 and semantic < 0.40:
+            continue
 
         if max(
             entailment,
@@ -3529,100 +3279,65 @@ def classify_result(evidence):
 
             continue
 
-
         usable.append(
             item
         )
-
 
     if not usable:
 
         return (
 
             "Unverified",
-
             0,
-
             0.0,
-
             0.0,
-
             1.0
 
         )
 
-
-    # ========================================================
-    # CALCULATE WEIGHTED EVIDENCE
-    # ========================================================
-
     for item in usable:
 
         retrieval = float(
-
             item.get(
                 "retrieval_score",
                 0
-            )
-
+            ) or 0
         )
 
-
         quality = float(
-
             item.get(
                 "source_quality",
                 0
-            )
-
+            ) or 0
         )
 
-
         freshness = float(
-
             item.get(
                 "freshness",
                 0.35
-            )
-
+            ) or 0.35
         )
 
-
         entailment = float(
-
             item.get(
                 "entailment",
                 0
-            )
-
+            ) or 0
         )
 
-
         contradiction = float(
-
             item.get(
                 "contradiction",
                 0
-            )
-
+            ) or 0
         )
 
-
         neutral_score = float(
-
             item.get(
                 "neutral",
                 0
-            )
-
+            ) or 0
         )
-
-
-        # ----------------------------------------------------
-        # Weight
-        #
-        # High quality + fresh + relevant = stronger evidence
-        # ----------------------------------------------------
 
         weight = (
 
@@ -3631,42 +3346,32 @@ def classify_result(evidence):
             *
 
             (
+
                 0.60
+
                 +
+
                 0.25 * quality
+
                 +
+
                 0.15 * freshness
+
             )
 
         )
 
-
         supporting += (
-
-            entailment
-            *
-            weight
-
+            entailment * weight
         )
-
 
         contradicting += (
-
-            contradiction
-            *
-            weight
-
+            contradiction * weight
         )
-
 
         neutral += (
-
-            neutral_score
-            *
-            weight
-
+            neutral_score * weight
         )
-
 
     total = (
 
@@ -3678,50 +3383,40 @@ def classify_result(evidence):
 
     )
 
-
     if total <= 0:
 
         return (
 
             "Unverified",
-
             0,
-
             0.0,
-
             0.0,
-
             1.0
 
         )
 
-
     supporting /= total
-
     contradicting /= total
-
     neutral /= total
-
 
     evidence_count = len(
         usable
     )
 
-
-    # ========================================================
-    # COUNT INDEPENDENT SOURCES
-    # ========================================================
-
     domains = set()
-
 
     for item in usable:
 
-        domain = item.get(
-            "domain",
-            ""
-        )
+        domain = str(
 
+            item.get(
+                "domain",
+                ""
+            )
+            or
+            ""
+
+        ).strip().lower()
 
         if domain:
 
@@ -3729,72 +3424,86 @@ def classify_result(evidence):
                 domain
             )
 
-
     independent_sources = len(
         domains
     )
 
-
-    # ========================================================
-    # STRONG SUPPORT / CONTRADICTION
-    # ========================================================
-
     best_support = max(
 
-        [
+        (
 
             float(
                 item.get(
                     "entailment",
                     0
                 )
+                or
+                0
             )
 
             for item in usable
 
-        ],
+        ),
 
-        default=0
+        default=0.0
 
     )
 
-
     best_contradiction = max(
 
-        [
+        (
 
             float(
                 item.get(
                     "contradiction",
                     0
                 )
+                or
+                0
             )
 
             for item in usable
 
-        ],
+        ),
 
-        default=0
+        default=0.0
 
     )
 
+    has_strong_source = any(
 
-    # ========================================================
-    # DECISION
-    # ========================================================
+        float(
+            item.get(
+                "source_quality",
+                0
+            )
+            or
+            0
+        ) >= 0.90
+
+        for item in usable
+
+    )
+
+    enough_support_evidence = (
+
+        evidence_count >= 2
+
+        or
+
+        independent_sources >= 2
+
+        or
+
+        (
+            evidence_count >= 1
+            and
+            has_strong_source
+        )
+
+    )
 
     status = "Unverified"
-
-
-    # --------------------------------------------------------
-    # Supported
-    #
-    # Require:
-    # - enough evidence
-    # - support > contradiction
-    # - weighted support >= 0.60
-    # - at least one strong source
-    # --------------------------------------------------------
 
     if (
 
@@ -3802,8 +3511,7 @@ def classify_result(evidence):
 
         and
 
-        supporting >
-        contradicting + 0.10
+        supporting > contradicting + 0.10
 
         and
 
@@ -3811,32 +3519,11 @@ def classify_result(evidence):
 
         and
 
-        (
-            evidence_count >= 2
-            or
-            independent_sources >= 2
-            or
-            (
-                evidence_count >= 1
-                and
-                any(
-                    item.get(
-                        "source_quality",
-                        0
-                    ) >= 0.90
-                    for item in usable
-                )
-            )
-        )
+        enough_support_evidence
 
     ):
 
         status = "Supported"
-
-
-    # --------------------------------------------------------
-    # Contradicted
-    # --------------------------------------------------------
 
     elif (
 
@@ -3844,8 +3531,7 @@ def classify_result(evidence):
 
         and
 
-        contradicting >
-        supporting + 0.10
+        contradicting > supporting + 0.10
 
         and
 
@@ -3853,100 +3539,55 @@ def classify_result(evidence):
 
         and
 
-        (
-            evidence_count >= 2
-            or
-            independent_sources >= 2
-            or
-            (
-                evidence_count >= 1
-                and
-                any(
-                    item.get(
-                        "source_quality",
-                        0
-                    ) >= 0.90
-                    for item in usable
-                )
-            )
-        )
+        enough_support_evidence
 
     ):
 
         status = "Contradicted"
 
-
-    # ========================================================
-    # CONFIDENCE
-    # ========================================================
-
     best = max(
 
         supporting,
-
         contradicting
 
     )
 
+    if status in (
 
-    if status == "Supported":
+        "Supported",
+        "Contradicted"
+
+    ):
 
         confidence = int(
-
             round(
                 best * 100
             )
-
         )
 
-
         confidence = max(
+
             60,
+
             min(
                 confidence,
                 99
             )
-        )
-
-
-    elif status == "Contradicted":
-
-        confidence = int(
-
-            round(
-                best * 100
-            )
 
         )
-
-
-        confidence = max(
-            60,
-            min(
-                confidence,
-                99
-            )
-        )
-
 
     else:
 
-        # Unverified should not pretend to be highly certain.
-
         confidence = int(
-
             round(
                 best * 100
             )
-
         )
-
 
         confidence = min(
             confidence,
             49
         )
-
 
     return (
 
@@ -3982,26 +3623,18 @@ def extract_claim(text):
         text
     )
 
-
     if not text:
         return ""
-
 
     sentences = sentence_split(
         text
     )
 
-
     if not sentences:
         return text
 
-
     if len(sentences) == 1:
         return sentences[0]
-
-
-    # If user entered a long article,
-    # use only meaningful first sentences.
 
     return clean_text(
 
@@ -4020,12 +3653,8 @@ def extract_entities(text):
 
     entities = []
 
-
     if not text:
         return entities
-
-
-    # Myanmar words
 
     words = re.findall(
 
@@ -4035,55 +3664,42 @@ def extract_entities(text):
 
     )
 
-
     seen = set()
-
 
     for word in words:
 
         word = word.strip()
 
-
         if word in seen:
             continue
-
 
         seen.add(
             word
         )
 
-
         entities.append({
 
             "type":
-            "TERM",
+                "TERM",
 
             "value":
-            word
+                word
 
         })
 
-
-        if len(
-            entities
-        ) >= 10:
-
+        if len(entities) >= 10:
             break
-
 
     return entities
 
 
 # ============================================================
-# EXPLANATION GENERATOR
+# EXPLANATION
 # ============================================================
 
 def build_explanation(
-
     status,
-
     evidence
-
 ):
 
     if status == "Supported":
@@ -4097,7 +3713,6 @@ def build_explanation(
 
         )
 
-
     if status == "Contradicted":
 
         return (
@@ -4108,7 +3723,6 @@ def build_explanation(
 
         )
 
-
     if not evidence:
 
         return (
@@ -4118,7 +3732,6 @@ def build_explanation(
 
         )
 
-
     return (
 
         "Relevant web sources were found, but the "
@@ -4127,6 +3740,87 @@ def build_explanation(
         "Contradicted."
 
     )
+
+
+# ============================================================
+# EMPTY / FAILED RESULT
+# ============================================================
+
+def empty_result(
+    claim="",
+    explanation=None
+):
+
+    if explanation is None:
+
+        explanation = (
+
+            "No sufficiently relevant and readable "
+            "web evidence was found to verify this claim."
+
+        )
+
+    return {
+
+        "status":
+            "Unverified",
+
+        "confidence":
+            0,
+
+        "claim":
+            claim,
+
+        "supporting":
+            0.0,
+
+        "contradicting":
+            0.0,
+
+        "neutral":
+            1.0,
+
+        "evidence":
+            [],
+
+        "entities":
+            extract_entities(
+                claim
+            ),
+
+        "evidence_count":
+            0,
+
+        "explanation":
+            explanation
+
+    }
+
+
+# ============================================================
+# SOCIAL URL SEARCH FALLBACK
+#
+# IMPORTANT:
+# This function intentionally does NOT search the social URL.
+#
+# Searching:
+#     "https://facebook.com/share/..."
+#
+# causes Bing/DDG to return:
+#     m.me
+#     Facebook homepage
+#     generic Facebook pages
+#
+# Therefore failed social extraction means NO evidence.
+# ============================================================
+
+def search_social_url_text(url):
+
+    print(
+        "Social search fallback disabled for verification."
+    )
+
+    return None
 
 
 # ============================================================
@@ -4145,50 +3839,67 @@ def verify_article(
         text
     )
 
-
     print()
-    print(
-        "=" * 70
-    )
-
-    print(
-        "AI FACT VERIFICATION"
-    )
-
-    print(
-        "=" * 70
-    )
-
+    print("=" * 70)
+    print("AI FACT VERIFICATION")
+    print("=" * 70)
 
     print(
         "CLAIM:",
         claim
     )
 
+    # ========================================================
+    # IMPORTANT SAFETY CHECK
+    #
+    # Never verify a social URL string itself.
+    # ========================================================
+
+    if source_url and is_social_url(
+        source_url
+    ):
+
+        if not claim:
+
+            return empty_result(
+                "",
+                "The social media content could not be extracted."
+            )
+
+        if is_url(
+            claim
+        ):
+
+            print(
+                "Social content unavailable."
+            )
+
+            return empty_result(
+
+                "",
+
+                "The social media content could not be "
+                "extracted, so the URL itself was not used "
+                "as a claim."
+
+            )
+
+    if not claim:
+
+        return empty_result()
 
     print(
         "Searching public web..."
     )
 
-
-    # ========================================================
-    # SEARCH
-    # ========================================================
-
     search_results = search_public_web(
         claim
     )
-
 
     print(
         "Search results:",
         len(search_results)
     )
-
-
-    # ========================================================
-    # PREPARE EVIDENCE
-    # ========================================================
 
     evidence = prepare_web_evidence(
 
@@ -4198,133 +3909,127 @@ def verify_article(
 
     )
 
-
     print(
         "Readable evidence:",
         len(evidence)
     )
 
-
     # ========================================================
-    # USER-SUPPLIED SOURCE URL
+    # USER NORMAL WEBSITE SOURCE
     # ========================================================
 
-    if source_url:
+    if (
 
-        source_url = resolve_search_url(
+        source_url
+
+        and
+
+        not is_social_url(
             source_url
         )
 
+        and
 
-        if valid_result_url(
+        valid_result_url(
             source_url
-        ):
+        )
 
-            print(
-                "Checking user source:",
-                source_url
+    ):
+
+        print(
+            "Checking user source:",
+            source_url
+        )
+
+        source_article = extract_article(
+            source_url
+        )
+
+        if source_article:
+
+            source_text = clean_text(
+
+                source_article.get(
+                    "content",
+                    ""
+                )
+
             )
 
+            best_chunks = select_best_chunks(
 
-            source_article = extract_article(
-                source_url
+                claim,
+
+                source_text,
+
+                limit=3
+
             )
 
+            if best_chunks:
 
-            if source_article:
+                best_chunk = best_chunks[0]
 
-                source_text = clean_text(
+                best_text = best_chunk[
+                    "text"
+                ]
+
+                source_semantic = best_chunk[
+                    "score"
+                ]
+
+                source_nli = nli_prediction(
+
+                    claim,
+
+                    best_text
+
+                )
+
+                source_quality = source_quality_score(
+
+                    source_url
+
+                )
+
+                source_freshness = freshness_score(
 
                     source_article.get(
-                        "content",
+                        "date",
                         ""
                     )
 
                 )
 
+                source_retrieval = relevance_score(
 
-                # Best relevant passage
+                    source_semantic,
 
-                best_chunks = select_best_chunks(
+                    source_nli,
 
-                    claim,
+                    0.50,
 
-                    source_text,
+                    source_quality,
 
-                    limit=3
+                    source_freshness
 
                 )
 
+                source_evidence = {
 
-                if best_chunks:
-
-                    best_chunk = best_chunks[0]
-
-                    best_text = best_chunk[
-                        "text"
-                    ]
-
-                    source_semantic = best_chunk[
-                        "score"
-                    ]
-
-
-                    source_nli = nli_prediction(
-
-                        claim,
-
-                        best_text
-
-                    )
-
-
-                    source_quality = source_quality_score(
-
-                        source_url
-
-                    )
-
-
-                    source_freshness = freshness_score(
-
-                        source_article.get(
-                            "date",
-                            ""
-                        )
-
-                    )
-
-
-                    source_retrieval = relevance_score(
-
-                        source_semantic,
-
-                        source_nli,
-
-                        0.50,
-
-                        source_quality,
-
-                        source_freshness
-
-                    )
-
-
-                    source_evidence = {
-
-                        "title":
+                    "title":
                         source_article.get(
                             "title",
                             ""
                         ),
 
-                        "content":
+                    "content":
                         source_text,
 
-                        "best_evidence":
+                    "best_evidence":
                         best_text,
 
-                        "source":
+                    "source":
                         source_article.get(
                             "source",
                             get_domain(
@@ -4332,7 +4037,7 @@ def verify_article(
                             )
                         ),
 
-                        "domain":
+                    "domain":
                         source_article.get(
                             "domain",
                             get_domain(
@@ -4340,110 +4045,109 @@ def verify_article(
                             )
                         ),
 
-                        "url":
+                    "url":
                         source_url,
 
-                        "snippet":
+                    "snippet":
                         "",
 
-                        "engine":
+                    "engine":
                         "User Source",
 
-                        "date":
+                    "date":
                         source_article.get(
                             "date",
                             ""
                         ),
 
-                        "source_quality":
+                    "source_quality":
                         round(
                             source_quality,
                             4
                         ),
 
-                        "freshness":
+                    "freshness":
                         round(
                             source_freshness,
                             4
                         ),
 
-                        "keyword_overlap":
+                    "keyword_overlap":
                         round(
+
                             keyword_overlap(
                                 claim,
                                 best_text
                             ),
+
                             4
+
                         ),
 
-                        "semantic_score":
+                    "semantic_score":
                         round(
                             source_semantic,
                             4
                         ),
 
-                        "entailment":
+                    "entailment":
                         source_nli[
                             "entailment"
                         ],
 
-                        "contradiction":
+                    "contradiction":
                         source_nli[
                             "contradiction"
                         ],
 
-                        "neutral":
+                    "neutral":
                         source_nli[
                             "neutral"
                         ],
 
-                        "nli_label":
+                    "nli_label":
                         source_nli[
                             "label"
                         ],
 
-                        "retrieval_score":
+                    "retrieval_score":
                         round(
                             source_retrieval,
                             4
                         )
 
-                    }
+                }
 
+                source_key = normalize_url_for_compare(
 
-                    source_key = (
-                        normalize_url_for_compare(
-                            source_url
+                    source_url
+
+                )
+
+                exists = any(
+
+                    normalize_url_for_compare(
+
+                        item.get(
+                            "url",
+                            ""
                         )
-                    )
-
-
-                    exists = any(
-
-                        normalize_url_for_compare(
-
-                            item.get(
-                                "url",
-                                ""
-                            )
-
-                        )
-
-                        ==
-
-                        source_key
-
-                        for item in evidence
 
                     )
 
+                    ==
 
-                    if not exists:
+                    source_key
 
-                        evidence.append(
-                            source_evidence
-                        )
+                    for item in evidence
 
+                )
+
+                if not exists:
+
+                    evidence.append(
+                        source_evidence
+                    )
 
     # ========================================================
     # FINAL SORT
@@ -4474,14 +4178,12 @@ def verify_article(
 
     )
 
-
     evidence = evidence[
         :MAX_EVIDENCE
     ]
 
-
     # ========================================================
-    # CLASSIFICATION
+    # CLASSIFY
     # ========================================================
 
     (
@@ -4500,7 +4202,6 @@ def verify_article(
         evidence
     )
 
-
     # ========================================================
     # EXPLANATION
     # ========================================================
@@ -4513,78 +4214,61 @@ def verify_article(
 
     )
 
-
-    # ========================================================
-    # FINAL RESULT OBJECT
-    # ========================================================
-
     result = {
 
         "status":
-        status,
+            status,
 
         "confidence":
-        confidence,
+            confidence,
 
         "claim":
-        claim,
+            claim,
 
         "supporting":
-        supporting,
+            supporting,
 
         "contradicting":
-        contradicting,
+            contradicting,
 
         "neutral":
-        neutral,
+            neutral,
 
         "evidence":
-        evidence,
+            evidence,
 
         "entities":
-        extract_entities(
-            claim
-        ),
+            extract_entities(
+                claim
+            ),
 
         "evidence_count":
-        len(evidence),
+            len(evidence),
 
         "explanation":
-        explanation
+            explanation
 
     }
-
 
     # ========================================================
     # TERMINAL OUTPUT
     # ========================================================
 
     print()
-    print(
-        "=" * 70
-    )
-
-    print(
-        "FINAL VERIFICATION RESULT"
-    )
-
-    print(
-        "=" * 70
-    )
-
+    print("=" * 70)
+    print("FINAL VERIFICATION RESULT")
+    print("=" * 70)
 
     print(
         "Status:",
         status
     )
 
-
     print(
         "Confidence:",
         confidence,
         "%"
     )
-
 
     print(
         "Supporting:",
@@ -4594,7 +4278,6 @@ def verify_article(
         )
     )
 
-
     print(
         "Contradicting:",
         round(
@@ -4602,7 +4285,6 @@ def verify_article(
             4
         )
     )
-
 
     print(
         "Neutral:",
@@ -4612,25 +4294,19 @@ def verify_article(
         )
     )
 
-
     print(
         "Evidence:",
         len(evidence)
     )
 
-
     print()
-    print(
-        "EVIDENCE SOURCES"
-    )
-
+    print("EVIDENCE SOURCES")
 
     if not evidence:
 
         print(
             "No reliable evidence found."
         )
-
 
     for index, item in enumerate(
 
@@ -4650,7 +4326,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Title:",
             item.get(
@@ -4658,7 +4333,6 @@ def verify_article(
                 ""
             )
         )
-
 
         print(
             "   Date:",
@@ -4668,7 +4342,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Semantic:",
             item.get(
@@ -4676,7 +4349,6 @@ def verify_article(
                 0
             )
         )
-
 
         print(
             "   Source Quality:",
@@ -4686,7 +4358,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Freshness:",
             item.get(
@@ -4694,7 +4365,6 @@ def verify_article(
                 0
             )
         )
-
 
         print(
             "   Keyword Overlap:",
@@ -4704,7 +4374,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Entailment:",
             item.get(
@@ -4712,7 +4381,6 @@ def verify_article(
                 0
             )
         )
-
 
         print(
             "   Contradiction:",
@@ -4722,7 +4390,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Neutral:",
             item.get(
@@ -4730,7 +4397,6 @@ def verify_article(
                 0
             )
         )
-
 
         print(
             "   NLI Label:",
@@ -4740,7 +4406,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Retrieval:",
             item.get(
@@ -4748,7 +4413,6 @@ def verify_article(
                 0
             )
         )
-
 
         print(
             "   URL:",
@@ -4758,7 +4422,6 @@ def verify_article(
             )
         )
 
-
         print(
             "   Best Evidence:",
             item.get(
@@ -4767,13 +4430,595 @@ def verify_article(
             )[:500]
         )
 
-
     print(
         "=" * 70
     )
 
-
     return result
+
+
+# ============================================================
+# HTML TEMPLATE
+# ============================================================
+
+HTML = r"""
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>AI Fact Verification</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+
+    margin: 0;
+
+    font-family:
+        Arial,
+        "Noto Sans Myanmar",
+        sans-serif;
+
+    background:
+        #f5f7fb;
+
+    color:
+        #202124;
+
+}
+
+.container {
+
+    width: 92%;
+
+    max-width: 1100px;
+
+    margin:
+        40px auto;
+
+}
+
+.header {
+
+    background:
+        white;
+
+    border-radius:
+        18px;
+
+    padding:
+        28px;
+
+    box-shadow:
+        0 5px 20px rgba(
+            0,
+            0,
+            0,
+            0.07
+        );
+
+    margin-bottom:
+        20px;
+
+}
+
+.header h1 {
+
+    margin:
+        0 0 8px;
+
+}
+
+.header p {
+
+    margin:
+        0;
+
+    color:
+        #666;
+
+}
+
+.card {
+
+    background:
+        white;
+
+    border-radius:
+        18px;
+
+    padding:
+        25px;
+
+    box-shadow:
+        0 5px 20px rgba(
+            0,
+            0,
+            0,
+            0.07
+        );
+
+    margin-bottom:
+        20px;
+
+}
+
+textarea {
+
+    width:
+        100%;
+
+    min-height:
+        180px;
+
+    padding:
+        15px;
+
+    border:
+        1px solid #ddd;
+
+    border-radius:
+        12px;
+
+    font-size:
+        16px;
+
+    resize:
+        vertical;
+
+    outline:
+        none;
+
+}
+
+textarea:focus {
+
+    border-color:
+        #777;
+
+}
+
+button {
+
+    margin-top:
+        15px;
+
+    padding:
+        12px 25px;
+
+    border:
+        none;
+
+    border-radius:
+        10px;
+
+    background:
+        #222;
+
+    color:
+        white;
+
+    font-size:
+        15px;
+
+    cursor:
+        pointer;
+
+}
+
+.result {
+
+    padding:
+        20px;
+
+    border-radius:
+        14px;
+
+    background:
+        #fafafa;
+
+}
+
+.status {
+
+    font-size:
+        26px;
+
+    font-weight:
+        bold;
+
+    margin-bottom:
+        8px;
+
+}
+
+.status.Supported {
+
+    color:
+        #16803c;
+
+}
+
+.status.Contradicted {
+
+    color:
+        #c62828;
+
+}
+
+.status.Unverified {
+
+    color:
+        #777;
+
+}
+
+.stats {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(
+                160px,
+                1fr
+            )
+        );
+
+    gap:
+        12px;
+
+    margin:
+        20px 0;
+
+}
+
+.stat {
+
+    padding:
+        15px;
+
+    border:
+        1px solid #eee;
+
+    border-radius:
+        12px;
+
+    background:
+        white;
+
+}
+
+.stat strong {
+
+    display:
+        block;
+
+    font-size:
+        20px;
+
+    margin-top:
+        5px;
+
+}
+
+.evidence {
+
+    margin-top:
+        20px;
+
+}
+
+.source {
+
+    border:
+        1px solid #e5e5e5;
+
+    border-radius:
+        14px;
+
+    padding:
+        18px;
+
+    margin-bottom:
+        14px;
+
+    background:
+        white;
+
+}
+
+.source h3 {
+
+    margin:
+        0 0 8px;
+
+}
+
+.source a {
+
+    color:
+        #3157a6;
+
+    word-break:
+        break-all;
+
+}
+
+.evidence-text {
+
+    margin-top:
+        12px;
+
+    padding:
+        12px;
+
+    background:
+        #f5f5f5;
+
+    border-radius:
+        10px;
+
+    line-height:
+        1.6;
+
+}
+
+label {
+
+    display:
+        block;
+
+    font-weight:
+        bold;
+
+    margin-bottom:
+        8px;
+
+}
+
+.empty {
+
+    color:
+        #777;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="header">
+
+        <h1>
+            AI Fact Verification System
+        </h1>
+
+        <p>
+            Verify text or webpage claims using
+            semantic similarity, NLI and web evidence.
+        </p>
+
+    </div>
+
+
+    <div class="card">
+
+        <form method="POST">
+
+            <label>
+                Enter text or URL
+            </label>
+
+            <textarea
+                name="content"
+                placeholder="Enter a claim or paste a URL..."
+            ></textarea>
+
+            <button type="submit">
+                Verify
+            </button>
+
+        </form>
+
+    </div>
+
+
+    {% if result %}
+
+    <div class="card">
+
+        <div class="result">
+
+            <div class="status {{ result.status }}">
+
+                {{ result.status }}
+
+            </div>
+
+            <p>
+                {{ result.explanation }}
+            </p>
+
+
+            <div class="stats">
+
+                <div class="stat">
+                    Status
+                    <strong>
+                        {{ result.status }}
+                    </strong>
+                </div>
+
+                <div class="stat">
+                    Confidence
+                    <strong>
+                        {{ result.confidence }}%
+                    </strong>
+                </div>
+
+                <div class="stat">
+                    Supporting
+                    <strong>
+                        {{ result.supporting }}
+                    </strong>
+                </div>
+
+                <div class="stat">
+                    Contradicting
+                    <strong>
+                        {{ result.contradicting }}
+                    </strong>
+                </div>
+
+                <div class="stat">
+                    Neutral
+                    <strong>
+                        {{ result.neutral }}
+                    </strong>
+                </div>
+
+                <div class="stat">
+                    Evidence
+                    <strong>
+                        {{ result.evidence_count }}
+                    </strong>
+                </div>
+
+            </div>
+
+
+            <h3>
+                Claim
+            </h3>
+
+            <div class="evidence-text">
+                {{ result.claim }}
+            </div>
+
+
+            <div class="evidence">
+
+                <h2>
+                    Evidence Sources
+                </h2>
+
+                {% if result.evidence %}
+
+                    {% for item in result.evidence %}
+
+                    <div class="source">
+
+                        <h3>
+                            {{ loop.index }}.
+                            {{ item.source }}
+                        </h3>
+
+                        <p>
+                            <strong>
+                                {{ item.title }}
+                            </strong>
+                        </p>
+
+                        <p>
+                            Date:
+                            {{ item.date or "Unknown" }}
+                        </p>
+
+                        <p>
+                            Semantic:
+                            {{ item.semantic_score }}
+                        </p>
+
+                        <p>
+                            Source Quality:
+                            {{ item.source_quality }}
+                        </p>
+
+                        <p>
+                            Freshness:
+                            {{ item.freshness }}
+                        </p>
+
+                        <p>
+                            Entailment:
+                            {{ item.entailment }}
+                        </p>
+
+                        <p>
+                            Contradiction:
+                            {{ item.contradiction }}
+                        </p>
+
+                        <p>
+                            NLI:
+                            {{ item.nli_label }}
+                        </p>
+
+                        <p>
+                            Retrieval:
+                            {{ item.retrieval_score }}
+                        </p>
+
+                        <p>
+                            <a
+                                href="{{ item.url }}"
+                                target="_blank"
+                            >
+                                {{ item.url }}
+                            </a>
+                        </p>
+
+                        <div class="evidence-text">
+
+                            {{ item.best_evidence }}
+
+                        </div>
+
+                    </div>
+
+                    {% endfor %}
+
+                {% else %}
+
+                    <p class="empty">
+                        No reliable evidence found.
+                    </p>
+
+                {% endif %}
+
+            </div>
+
+        </div>
+
+    </div>
+
+    {% endif %}
+
+</div>
+
+</body>
+
+</html>
+"""
+
 
 # ============================================================
 # FLASK HOME
@@ -4791,7 +5036,6 @@ def home():
 
     result = None
 
-
     if request.method == "POST":
 
         user_input = request.form.get(
@@ -4802,28 +5046,21 @@ def home():
 
         ).strip()
 
-
-        # ====================================================
-        # EMPTY INPUT
-        # ====================================================
-
         if not user_input:
 
-            return render_template(
+            return render_template_string(
 
-                "index.html",
+                HTML,
 
                 result=None
 
             )
 
-
         extracted = None
 
-        analysis_text = user_input
+        analysis_text = ""
 
         source_url = None
-
 
         # ====================================================
         # URL INPUT
@@ -4835,57 +5072,213 @@ def home():
 
             source_url = user_input
 
-
             print()
-            print(
-                "=" * 70
-            )
+            print("=" * 70)
+            print("URL INPUT")
+            print(source_url)
+            print("=" * 70)
 
-            print(
-                "URL INPUT"
-            )
+            # =================================================
+            # SOCIAL MEDIA URL
+            # =================================================
 
-            print(
+            if is_social_url(
                 source_url
-            )
+            ):
 
-            print(
-                "=" * 70
-            )
-
-
-            extracted = extract_article(
-                source_url
-            )
-
-
-            if extracted:
-
-                analysis_text = clean_text(
-
-                    extracted.get(
-                        "title",
-                        ""
-                    )
-
-                    + " "
-
-                    + extracted.get(
-                        "content",
-                        ""
-                    )
-
+                print(
+                    "Social URL detected."
                 )
 
+                extracted = extract_social_text(
+                    source_url
+                )
+
+                # ------------------------------------------------
+                # IMPORTANT:
+                # DO NOT use the URL itself as claim.
+                # ------------------------------------------------
+
+                if extracted:
+
+                    analysis_text = clean_text(
+
+                        extracted.get(
+                            "content",
+                            ""
+                        )
+
+                    )
+
+                    print(
+                        "Extracted social text:"
+                    )
+
+                    print(
+                        analysis_text[:1000]
+                    )
+
+                else:
+
+                    print(
+                        "Social extraction failed."
+                    )
+
+                    print(
+                        "URL will NOT be used as claim."
+                    )
+
+                    # ------------------------------------------------
+                    # Directly return Unverified / Evidence 0.
+                    # ------------------------------------------------
+
+                    result = empty_result(
+
+                        "",
+
+                        "The social media content could not "
+                        "be extracted. The URL itself was not "
+                        "used as a claim."
+
+                    )
+
+                    # ------------------------------------------------
+                    # Save history
+                    # ------------------------------------------------
+
+                    try:
+
+                        history = History(
+
+                            input_text=user_input,
+
+                            extracted_text=None,
+
+                            result=json.dumps(
+
+                                result,
+
+                                ensure_ascii=False
+
+                            )
+
+                        )
+
+                        db.session.add(
+                            history
+                        )
+
+                        db.session.commit()
+
+                    except Exception as e:
+
+                        db.session.rollback()
+
+                        print(
+                            "Database save error:",
+                            e
+                        )
+
+                    return render_template_string(
+
+                        HTML,
+
+                        result=result
+
+                    )
+
+            # =================================================
+            # NORMAL WEBSITE
+            # =================================================
 
             else:
 
-                # If URL cannot be extracted,
-                # still verify the URL itself
-                # only if there is no article text.
+                extracted = extract_article(
+                    source_url
+                )
 
-                analysis_text = user_input
+                if extracted:
 
+                    analysis_text = clean_text(
+
+                        extracted.get(
+                            "title",
+                            ""
+                        )
+
+                        + " "
+
+                        + extracted.get(
+                            "content",
+                            ""
+                        )
+
+                    )
+
+                else:
+
+                    print(
+                        "Website extraction failed."
+                    )
+
+                    result = empty_result(
+
+                        "",
+
+                        "The webpage content could not "
+                        "be extracted, so it could not "
+                        "be verified."
+
+                    )
+
+                    try:
+
+                        history = History(
+
+                            input_text=user_input,
+
+                            extracted_text=None,
+
+                            result=json.dumps(
+
+                                result,
+
+                                ensure_ascii=False
+
+                            )
+
+                        )
+
+                        db.session.add(
+                            history
+                        )
+
+                        db.session.commit()
+
+                    except Exception as e:
+
+                        db.session.rollback()
+
+                        print(
+                            "Database save error:",
+                            e
+                        )
+
+                    return render_template_string(
+
+                        HTML,
+
+                        result=result
+
+                    )
+
+        # ====================================================
+        # NORMAL TEXT INPUT
+        # ====================================================
+
+        else:
+
+            analysis_text = user_input
 
         # ====================================================
         # VERIFY
@@ -4898,7 +5291,6 @@ def home():
             source_url
 
         )
-
 
         # ====================================================
         # SAVE HISTORY
@@ -4936,29 +5328,24 @@ def home():
 
             )
 
-
             db.session.add(
                 history
             )
 
-
             db.session.commit()
-
 
         except Exception as e:
 
             db.session.rollback()
-
 
             print(
                 "Database save error:",
                 e
             )
 
+    return render_template_string(
 
-    return render_template(
-
-        "index.html",
+        HTML,
 
         result=result
 
@@ -4979,15 +5366,165 @@ def health():
     return {
 
         "status":
-        "ok",
+            "ok",
 
         "service":
-        "AI Fact Verification",
+            "AI Fact Verification",
 
         "time":
-        datetime.now().isoformat()
+            datetime.now().isoformat()
 
     }
+
+
+# ============================================================
+# API VERIFY
+# ============================================================
+
+@app.route(
+    "/api/verify",
+    methods=["POST"]
+)
+
+def api_verify():
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    user_input = clean_text(
+
+        data.get(
+            "content",
+            ""
+        )
+
+    )
+
+    if not user_input:
+
+        return jsonify({
+
+            "error":
+                "content is required"
+
+        }), 400
+
+    # --------------------------------------------------------
+    # Social URL
+    # --------------------------------------------------------
+
+    if is_url(
+        user_input
+    ) and is_social_url(
+        user_input
+    ):
+
+        extracted = extract_social_text(
+            user_input
+        )
+
+        if not extracted:
+
+            return jsonify(
+                empty_result(
+
+                    "",
+
+                    "The social media content could not "
+                    "be extracted. The URL itself was not "
+                    "used as a claim."
+
+                )
+            )
+
+        text = clean_text(
+
+            extracted.get(
+                "content",
+                ""
+            )
+
+        )
+
+        result = verify_article(
+
+            text,
+
+            user_input
+
+        )
+
+        return jsonify(
+            result
+        )
+
+    # --------------------------------------------------------
+    # Normal URL
+    # --------------------------------------------------------
+
+    if is_url(
+        user_input
+    ):
+
+        article = extract_article(
+            user_input
+        )
+
+        if not article:
+
+            return jsonify(
+
+                empty_result(
+
+                    "",
+
+                    "The webpage content could not "
+                    "be extracted."
+
+                )
+
+            )
+
+        text = clean_text(
+
+            article.get(
+                "title",
+                ""
+            )
+
+            + " "
+
+            + article.get(
+                "content",
+                ""
+            )
+
+        )
+
+        result = verify_article(
+
+            text,
+
+            user_input
+
+        )
+
+        return jsonify(
+            result
+        )
+
+    # --------------------------------------------------------
+    # Normal claim
+    # --------------------------------------------------------
+
+    result = verify_article(
+        user_input
+    )
+
+    return jsonify(
+        result
+    )
 
 
 # ============================================================
@@ -5002,19 +5539,10 @@ if __name__ == "__main__":
         logging.WARNING
     )
 
-
     print()
-    print(
-        "=" * 70
-    )
-
-    print(
-        "AI FACT VERIFICATION SYSTEM"
-    )
-
-    print(
-        "=" * 70
-    )
+    print("=" * 70)
+    print("AI FACT VERIFICATION SYSTEM")
+    print("=" * 70)
 
     print(
         "Server: http://127.0.0.1:5000"
@@ -5034,12 +5562,8 @@ if __name__ == "__main__":
         NLI_MODEL_NAME
     )
 
-    print(
-        "=" * 70
-    )
-
+    print("=" * 70)
     print()
-
 
     app.run(
 
