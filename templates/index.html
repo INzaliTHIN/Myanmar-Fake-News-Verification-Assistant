@@ -1,362 +1,169 @@
 <!DOCTYPE html>
-
 <html lang="my">
-
 <head>
-
-<meta charset="UTF-8">
-
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-
-<title>
-Myanmar AI Fact Verification Assistant
-</title>
-
-
-<link rel="stylesheet"
-href="{{ url_for('static', filename='style.css') }}">
-
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Myanmar News Verification System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-
-
 <body>
-
-
 <div class="container">
+    <header class="hero card">
+        <div class="brand">🇲🇲</div>
+        <div>
+            <h1>Myanmar News Verification</h1>
+            <p>မြန်မာသတင်းအချက်အလက်များကို ယုံကြည်ရသော အရင်းအမြစ်များမှ စစ်ဆေးပါ။</p>
+        </div>
+    </header>
 
+    <section class="card">
+        <label for="claim">စစ်ဆေးလိုသော Claim</label>
+        <textarea id="claim" placeholder="ဥပမာ - လေးမျက်နှာမြို့မှာ ရေကြီးနေတယ်ဆိုတာ ဟုတ်ပါသလား။"></textarea>
+        <div class="buttons">
+            <button id="verifyBtn" class="primary" onclick="verifyNews()">🔎 Verify</button>
+            <button id="telegramBtn" class="secondary" onclick="testTelegram()">✈️ Test Telegram</button>
+        </div>
+        <div id="status" class="status"></div>
+    </section>
 
-<div class="header">
+    <section id="resultCard" class="card hidden">
+        <div class="section-title"><span>📋</span><h2>Verification Result</h2></div>
+        <div id="result"></div>
+    </section>
 
-<h1>
-📰 Myanmar AI Fact Verification Assistant
-</h1>
-
-
-<p>
-AI Based Fake News Verification System
-</p>
-
+    <section id="sourcesCard" class="card hidden">
+        <div class="section-title"><span>🔗</span><h2>Trusted Evidence Sources</h2></div>
+        <p class="muted">Search engine result pages are not evidence. Only readable trusted source pages are shown below.</p>
+        <div id="sources"></div>
+    </section>
 </div>
 
-
-
-
-<form method="POST">
-
-
-<textarea
-
-name="content"
-
-placeholder="Enter Myanmar news text or public URL..."
-
-required></textarea>
-
-
-
-<button type="submit">
-
-🔍 Verify
-
-</button>
-
-
-</form>
-
-
-
-
-
-{% if result %}
-
-
-
-<div class="result-card">
-
-
-<h2>
-Verification Result
-</h2>
-
-
-
-<div class="box">
-
-
-<h3>
-Claim
-</h3>
-
-
-<p>
-
-{{ result.claim }}
-
-</p>
-
-
-</div>
-
-
-
-
-
-
-<div class="box">
-
-
-<h3>
-Status
-</h3>
-
-
-<p class="status">
-
-{{ result.status }}
-
-</p>
-
-
-
-<h3>
-Confidence
-</h3>
-
-
-<p>
-
-{{ result.confidence }} %
-
-</p>
-
-
-
-</div>
-
-
-
-
-
-
-<div class="box">
-
-
-<h3>
-Entities
-</h3>
-
-
-{% for entity in result.entities %}
-
-
-<p>
-
-{{ entity.type }}
-
-:
-
-{{ entity.value }}
-
-</p>
-
-
-{% endfor %}
-
-
-
-</div>
-
-
-
-
-
-
-
-<div class="box">
-
-
-<h3>
-Evidence Sources
-</h3>
-
-
-
-{% if result.evidence %}
-
-
-
-{% for item in result.evidence %}
-
-
-
-<div class="evidence-card">
-
-
-<h4>
-
-{{ item.title }}
-
-</h4>
-
-
-
-<p>
-
-{{ item.content[:500] }}
-
-...
-
-</p>
-
-
-
-
-<p>
-
-<b>
-Source:
-</b>
-
-{{ item.source }}
-
-</p>
-
-
-
-
-
-<p>
-
-<b>
-Semantic Score:
-</b>
-
-{{ item.semantic_score }}
-
-</p>
-
-
-
-
-
-<p>
-
-<b>
-Lexical Score:
-</b>
-
-{{ item.lexical_score }}
-
-</p>
-
-
-
-
-
-<p>
-
-<b>
-Trust Score:
-</b>
-
-{{ item.trust_score }}
-
-</p>
-
-
-
-
-
-<p>
-
-<b>
-Final Score:
-</b>
-
-{{ item.final_score }}
-
-</p>
-
-
-
-
-
-<a href="{{ item.url }}" target="_blank">
-
-🔗 Open Source
-
-</a>
-
-
-
-</div>
-
-
-
-{% endfor %}
-
-
-
-{% else %}
-
-
-<p>
-
-No matching evidence found.
-
-</p>
-
-
-{% endif %}
-
-
-
-</div>
-
-
-
-
-
-
-
-<div class="box">
-
-
-<h3>
-Explanation
-</h3>
-
-
-<p>
-
-{{ result.explanation }}
-
-</p>
-
-
-
-</div>
-
-
-
-
-
-</div>
-
-
-{% endif %}
-
-
-
-
-
-</div>
-
-
-
+<script>
+async function verifyNews() {
+    const claim = document.getElementById("claim").value.trim();
+    const status = document.getElementById("status");
+    const btn = document.getElementById("verifyBtn");
+
+    if (!claim) {
+        status.innerHTML = "⚠️ Claim ထည့်ပေးပါ။";
+        return;
+    }
+
+    btn.disabled = true;
+    status.innerHTML = "🔎 Trusted Myanmar sources တွေကို ရှာပြီး source တစ်ခုချင်းစီကို စစ်နေပါတယ်...";
+    document.getElementById("resultCard").classList.add("hidden");
+    document.getElementById("sourcesCard").classList.add("hidden");
+
+    try {
+        const response = await fetch("/api/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ claim: claim, telegram: true })
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Verification failed");
+        }
+
+        const confidence = Number(data.confidence_percent ?? ((data.confidence || 0) * 100));
+        const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+
+        document.getElementById("resultCard").classList.remove("hidden");
+        document.getElementById("result").innerHTML = `
+            <div class="result-grid">
+                <div class="result-main">
+                    <div class="status-badge ${statusClass(data.result)}">${escapeHtml(data.result || "UNVERIFIED")}</div>
+                    <h3>${escapeHtml(data.reason || "")}</h3>
+                    <p class="explanation">${escapeHtml(data.explanation || "")}</p>
+                </div>
+                <div class="confidence-box">
+                    <span>Confidence</span>
+                    <strong>${confidence.toFixed(1)}%</strong>
+                </div>
+            </div>
+            <div class="stats">
+                <div><b>${evidence.length}</b><span>Trusted sources checked as evidence</span></div>
+                <div><b>${escapeHtml(String(data.checked_at || ""))}</b><span>Checked time</span></div>
+                <div><b>${data.telegram_sent ? "✅ Sent" : "❌ Not sent"}</b><span>Telegram</span></div>
+            </div>
+            ${data.telegram_error ? `<div class="notice">✈️ ${escapeHtml(data.telegram_error)}</div>` : ""}
+        `;
+
+        let sourceHTML = "";
+        evidence.forEach((item, index) => {
+            const direction = String(item.direction || "neutral").toUpperCase();
+            sourceHTML += `
+                <article class="source-card">
+                    <div class="source-number">${index + 1}</div>
+                    <div class="source-body">
+                        <div class="source-top">
+                            <span class="source-name">${escapeHtml(item.source || item.domain || "Trusted Source")}</span>
+                            <span class="direction ${direction.toLowerCase()}">${escapeHtml(direction)}</span>
+                        </div>
+                        <h3>${escapeHtml(item.title || "Untitled")}</h3>
+                        <p>${escapeHtml(item.snippet || "No readable snippet available.")}</p>
+                        <div class="source-meta">
+                            <span>Trust: ${Number(item.trust || 0).toFixed(2)}</span>
+                            <span>Relevance: ${Number(item.relevance_score || 0).toFixed(2)}</span>
+                        </div>
+                        <a href="${safeUrl(item.url || "#")}" target="_blank" rel="noopener noreferrer">Open source ↗</a>
+                    </div>
+                </article>
+            `;
+        });
+
+        document.getElementById("sourcesCard").classList.remove("hidden");
+        document.getElementById("sources").innerHTML = sourceHTML || '<div class="empty">ယုံကြည်ရသော source မှ ဖတ်ရှုနိုင်သော evidence မတွေ့ပါ။</div>';
+        status.innerHTML = `✅ စစ်ဆေးပြီးပါပြီ — ${evidence.length} trusted evidence source ရှိပါတယ်။`;
+    } catch (error) {
+        status.innerHTML = "❌ Error: " + escapeHtml(error.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function testTelegram() {
+    const status = document.getElementById("status");
+    const btn = document.getElementById("telegramBtn");
+    btn.disabled = true;
+    status.innerHTML = "✈️ Telegram connection စမ်းနေပါတယ်...";
+    try {
+        const response = await fetch("/api/telegram/test");
+        const data = await response.json();
+        status.innerHTML = data.sent ? "✅ Telegram connection အလုပ်လုပ်နေပါတယ်။" : "❌ Telegram မပို့နိုင်ပါ — .env configuration ကိုစစ်ပါ။";
+    } catch (error) {
+        status.innerHTML = "❌ Telegram test error: " + escapeHtml(error.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function statusClass(value) {
+    const v = String(value || "").toUpperCase();
+    if (v.includes("VERIFIED") || v.includes("SUPPORTED")) return "verified";
+    if (v.includes("FALSE") || v.includes("DISPUTED")) return "disputed";
+    return "unverified";
+}
+
+function safeUrl(value) {
+    try {
+        const url = new URL(value, window.location.origin);
+        if (url.protocol !== "http:" && url.protocol !== "https:") return "#";
+        return url.href.replace(/"/g, "&quot;");
+    } catch (_) {
+        return "#";
+    }
+}
+
+function escapeHtml(text) {
+    return String(text ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+</script>
 </body>
-
-
 </html>
